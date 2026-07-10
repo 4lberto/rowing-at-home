@@ -35,16 +35,16 @@
       display: flex; justify-content: center; gap: 12px;
       padding: 16px 20px; pointer-events: none;
     }
-    #connect-btn, #camera-btn {
+    #connect-btn, #camera-btn, #stroke-btn {
       pointer-events: auto;
       padding: 12px 28px; font-size: 15px;
       border: none; border-radius: 8px; cursor: pointer;
       background: #0f3460; color: #fff; transition: background .2s;
     }
-    #connect-btn:hover { background: #1a4a8a; }
-    #connect-btn:disabled { opacity: .5; cursor: default; }
-    #camera-btn { background: #2a2a4e; }
-    #camera-btn:hover { background: #3a3a6e; }
+    #connect-btn:hover, #camera-btn:hover, #stroke-btn:hover { background: #1a4a8a; }
+    #connect-btn:disabled, #camera-btn:disabled, #stroke-btn:disabled { opacity: .5; cursor: default; }
+    #camera-btn, #stroke-btn { background: #2a2a4e; }
+    #camera-btn:hover, #stroke-btn:hover { background: #3a3a6e; }
 
     #log {
       font-family: "SF Mono", Monaco, Consolas, monospace; font-size: 11px;
@@ -81,6 +81,7 @@
 <div id="controls">
   <button id="connect-btn">Conectar a la máquina</button>
   <button id="camera-btn">Cámara</button>
+  <button id="stroke-btn">+1 Remada</button>
 </div>
 
 <script type="module">
@@ -91,21 +92,89 @@ import * as THREE from 'three';
 // ========================================================================
 
 let scene, camera, renderer, clock;
-let boat, rower, oarLeft, oarRight, river;
+let boat, rower, oarLeft, oarRight, river, bankL, bankR;
 const riverSegments = [];
 let cameraMode = 0; // 0: chase, 1: side, 2: cinematic
 const CAM_MODES = ['Trasera', 'Lateral', 'Cinemática'];
+const bots = [];
 
 // Estado del juego alimentado por BLE
 const gameState = {
-  speed: 0,          // km/h
+  speed: 0,          // km/h (mostrado en HUD, derivado de boatVelocity)
   cadence: 0,        // spm
   strokes: 0,
   distance: 0,       // metros (BLE)
   boatZ: 0,          // posicion virtual del barco (world units)
   strokePhase: 0,    // 0..1 fase de la remada actual
   lastStrokeTime: 0,
+  // Física del barco
+  boatVelocity: 0,   // velocidad en unidades de mundo/s
+  lastBLEStrokes: 0, // para detectar nuevas remadas del BLE
+  lastImpulseTime: 0,
 };
+
+// --- Modelo físico del remo ---
+// Cada remada aplica un impulso (delta de velocidad instantáneo).
+// El rozamiento del agua es cuadrático: F_drag = -k*v² - c*v
+// Velocidad terminal (steady state): v_t = sqrt(impulse * cadence / (60 * k))
+const PHYS = {
+  STROKE_IMPULSE: 0.35,   // delta de velocidad por remada (u/s)
+  DRAG_QUAD: 0.02,         // coef. rozamiento cuadrático (agua)
+  DRAG_LIN: 0.15,           // coef. rozamiento lineal (fricción residual)
+  MIN_VELOCITY: 0.01,       // debajo de esto, parar
+  MAX_VELOCITY: 3.5,        // tope (u/s) ≈ 17.5 km/h en HUD
+  KM_H_FACTOR: 5.0,        // conversión u/s → km/h para display
+  BLE_CADENCE_TIMEOUT: 4.0, // sin paquetes BLE tras N segundos, asumir parada
+};
+let lastBLEPacketTime = 0;
+
+function applyStrokeImpulse() {
+  gameState.boatVelocity += PHYS.STROKE_IMPULSE;
+  if (gameState.boatVelocity > PHYS.MAX_VELOCITY) {
+    gameState.boatVelocity = PHYS.MAX_VELOCITY;
+  }
+  gameState.lastImpulseTime = clock ? clock.elapsedTime : 0;
+}
+
+function updateBoatPhysics(dt) {
+  const v = gameState.boatVelocity;
+  // Rozamiento del agua: F = -(k*v² + c*v) en sentido opuesto al movimiento
+  const drag = PHYS.DRAG_QUAD * v * v + PHYS.DRAG_LIN * v;
+  gameState.boatVelocity -= drag * dt;
+
+  if (gameState.boatVelocity < PHYS.MIN_VELOCITY) {
+    gameState.boatVelocity = 0;
+  }
+
+  // Si la cadencia viene del BLE, aplicar impulsos periódicamente basados en cadencia
+  // (el BLE también detecta nuevas remadas vía stroke count, pero como los paquetes
+  //  no llegan exactamente al ritmo de cada remada, usamos un modelo de cadencia suave)
+  if (gameState.cadence > 0 && lastBLEPacketTime > 0) {
+    const timeSinceBLE = clock.elapsedTime - lastBLEPacketTime;
+    if (timeSinceBLE < PHYS.BLE_CADENCE_TIMEOUT) {
+      // Aplicar impulsos al ritmo de la cadencia
+      const strokeInterval = 60 / gameState.cadence;
+      const timeSinceImpulse = clock.elapsedTime - gameState.lastImpulseTime;
+      if (timeSinceImpulse >= strokeInterval) {
+        applyStrokeImpulse();
+      }
+    }
+  }
+
+  // Actualizar velocidad mostrada
+  gameState.speed = gameState.boatVelocity * PHYS.KM_H_FACTOR;
+
+  // Mover barco
+  gameState.boatZ -= gameState.boatVelocity * dt;
+  if (boat) {
+    boat.position.z = gameState.boatZ;
+    boat.position.x = riverCurveX(gameState.boatZ);
+    boat.rotation.y = riverHeading(gameState.boatZ);
+  }
+
+  // Actualizar HUD de velocidad
+  $sSpeed.textContent = gameState.speed.toFixed(1);
+}
 
 function initThree() {
   scene = new THREE.Scene();
@@ -142,6 +211,7 @@ function initThree() {
 
   buildRiver();
   buildBoat();
+  buildBots();
 
   window.addEventListener('resize', onResize);
   animate();
@@ -152,71 +222,141 @@ const RIVER_WIDTH = 14;
 const SEGMENT_LENGTH = 20;
 const NUM_SEGMENTS = 30;
 
+// --- Curva del río ---
+// El centro del río se desvía en X según una suma de senos (curva suave)
+const CURVE_AMPLITUDE = 7;   // desviación máxima en X (uds)
+const CURVE_FREQ = 0.004;    // frecuencia de la curva principal
+const CURVE_FREQ2 = 0.011;   // frecuencia secundaria (variación)
+
+// Devuelve la X del centro del río en la posición Z dada
+function riverCurveX(z) {
+  return Math.sin(z * CURVE_FREQ) * CURVE_AMPLITUDE
+       + Math.sin(z * CURVE_FREQ2 + 1.3) * CURVE_AMPLITUDE * 0.35;
+}
+
+// Devuelve el ángulo de rumbo (heading) en radianes en la posición Z dada
+// Es la derivada de riverCurveX: dX/dZ
+function riverHeading(z) {
+  return Math.atan(
+    Math.cos(z * CURVE_FREQ) * CURVE_AMPLITUDE * CURVE_FREQ
+    + Math.cos(z * CURVE_FREQ2 + 1.3) * CURVE_AMPLITUDE * 0.35 * CURVE_FREQ2
+  );
+}
+
+// --- Río infinito (paisaje procedural que se recicla) ---
+const trees = [];
+const mountains = [];
+const TREE_POOL = 60;
+const MOUNTAIN_POOL = 12;
+const SCENERY_RANGE = 200;  // distancia visible delantera
+const RECYCLE_DIST = 80;     // distancia trasera para reciclar
+
+// Materiales reutilizables para árboles y montañas
+const trunkMat = new THREE.MeshStandardMaterial({ color: 0x5D4037 });
+const foliageMats = [
+  new THREE.MeshStandardMaterial({ color: 0x388E3C, flatShading: true }),
+  new THREE.MeshStandardMaterial({ color: 0x43A047, flatShading: true }),
+  new THREE.MeshStandardMaterial({ color: 0x2E7D32, flatShading: true }),
+];
+const mountainMat = new THREE.MeshStandardMaterial({ color: 0x7986CB, roughness: 1, flatShading: true });
+
+// Geometrías reutilizables
+const trunkGeom = new THREE.CylinderGeometry(0.3, 0.4, 3, 6);
+const foliageGeom = new THREE.ConeGeometry(2, 5, 7);
+const mountainGeom = new THREE.ConeGeometry(40, 25, 5);
+
+// --- Río: planos planos que siguen al barco (sin rotación) ---
 function buildRiver() {
-  // Agua
-  const waterGeom = new THREE.PlaneGeometry(RIVER_WIDTH, SEGMENT_LENGTH * NUM_SEGMENTS, 1, 1);
-  const waterMat = new THREE.MeshStandardMaterial({
-    color: 0x2E86C1, roughness: 0.3, metalness: 0.6,
-  });
+  // Agua — plano ancho que sigue la posición del barco
+  const waterGeom = new THREE.PlaneGeometry(40, 400);
+  const waterMat = new THREE.MeshStandardMaterial({ color: 0x2E86C1, roughness: 0.3, metalness: 0.6, side: THREE.DoubleSide });
   river = new THREE.Mesh(waterGeom, waterMat);
   river.rotation.x = -Math.PI / 2;
-  river.position.z = -(SEGMENT_LENGTH * NUM_SEGMENTS) / 2 + SEGMENT_LENGTH;
   river.receiveShadow = true;
   scene.add(river);
 
-  // Orillas (low-poly: bloques verdes a los lados)
-  const bankGeom = new THREE.BoxGeometry(50, 3, SEGMENT_LENGTH * NUM_SEGMENTS);
+  // Orillas — cajas anchas a cada lado
+  const bankGeom = new THREE.BoxGeometry(80, 3, 400);
   const bankMat = new THREE.MeshStandardMaterial({ color: 0x2E7D32, roughness: 0.9 });
 
-  const bankL = new THREE.Mesh(bankGeom, bankMat);
-  bankL.position.set(-RIVER_WIDTH/2 - 25, -1, -(SEGMENT_LENGTH * NUM_SEGMENTS)/2 + SEGMENT_LENGTH);
+  bankL = new THREE.Mesh(bankGeom, bankMat);
+  bankL.position.set(-RIVER_WIDTH/2 - 40, -1, 0);
   bankL.receiveShadow = true;
   bankL.castShadow = true;
   scene.add(bankL);
 
-  const bankR = new THREE.Mesh(bankGeom, bankMat);
-  bankR.position.set(RIVER_WIDTH/2 + 25, -1, -(SEGMENT_LENGTH * NUM_SEGMENTS)/2 + SEGMENT_LENGTH);
+  bankR = new THREE.Mesh(bankGeom, bankMat);
+  bankR.position.set(RIVER_WIDTH/2 + 40, -1, 0);
   bankR.receiveShadow = true;
   bankR.castShadow = true;
   scene.add(bankR);
 
-  // Árboles low-poly dispersos en las orillas
-  const trunkGeom = new THREE.CylinderGeometry(0.3, 0.4, 3, 6);
-  const trunkMat = new THREE.MeshStandardMaterial({ color: 0x5D4037 });
-  const foliageGeom = new THREE.ConeGeometry(2, 5, 7);
-  const foliageMat1 = new THREE.MeshStandardMaterial({ color: 0x388E3C });
-  const foliageMat2 = new THREE.MeshStandardMaterial({ color: 0x43A047 });
-  const foliageMat3 = new THREE.MeshStandardMaterial({ color: 0x2E7D32 });
-
-  for (let i = 0; i < 80; i++) {
+  // --- Pool de árboles ---
+  for (let i = 0; i < TREE_POOL; i++) {
     const tree = new THREE.Group();
     const trunk = new THREE.Mesh(trunkGeom, trunkMat);
     trunk.position.y = 1.5;
     trunk.castShadow = true;
     tree.add(trunk);
 
-    const foliage = new THREE.Mesh(foliageGeom, [foliageMat1, foliageMat2, foliageMat3][i % 3]);
+    const foliage = new THREE.Mesh(foliageGeom, foliageMats[i % 3]);
     foliage.position.y = 5;
     foliage.castShadow = true;
     tree.add(foliage);
 
-    const side = i % 2 === 0 ? -1 : 1;
-    tree.position.x = side * (RIVER_WIDTH/2 + 8 + Math.random() * 30);
-    tree.position.z = -i * 12 - Math.random() * 10;
-    tree.scale.setScalar(0.7 + Math.random() * 0.6);
-    tree.rotation.y = Math.random() * Math.PI;
+    placeTree(tree, -i * (SCENERY_RANGE / TREE_POOL));
     scene.add(tree);
+    trees.push(tree);
   }
 
-  // Niebla / montañas lejanas (decorado de fondo)
-  const mountainGeom = new THREE.ConeGeometry(40, 25, 5);
-  const mountainMat = new THREE.MeshStandardMaterial({ color: 0x7986CB, roughness: 1, flatShading: true });
-  for (let i = 0; i < 8; i++) {
+  // --- Pool de montañas lejanas ---
+  for (let i = 0; i < MOUNTAIN_POOL; i++) {
     const m = new THREE.Mesh(mountainGeom, mountainMat);
-    const side = i % 2 === 0 ? -1 : 1;
-    m.position.set(side * (60 + Math.random() * 40), 8, -i * 60 - 40);
-    m.scale.set(1 + Math.random(), 0.8 + Math.random() * 0.5, 1);
+    placeMountain(m, -i * 80);
     scene.add(m);
+    mountains.push(m);
+  }
+}
+
+function placeTree(tree, z) {
+  const side = Math.random() < 0.5 ? -1 : 1;
+  const cx = riverCurveX(z);
+  tree.position.x = cx + side * (RIVER_WIDTH/2 + 6 + Math.random() * 30);
+  tree.position.z = z;
+  tree.position.y = 0;
+  tree.scale.setScalar(0.7 + Math.random() * 0.6);
+  tree.rotation.y = Math.random() * Math.PI;
+}
+
+function placeMountain(m, z) {
+  const side = Math.random() < 0.5 ? -1 : 1;
+  const cx = riverCurveX(z);
+  m.position.set(cx + side * (60 + Math.random() * 40), 8, z);
+  m.scale.set(1 + Math.random(), 0.8 + Math.random() * 0.5, 1);
+}
+
+function updateScenery() {
+  if (!boat) return;
+  const bz = boat.position.z;
+  const cx = riverCurveX(bz);
+
+  // Mover agua y orillas a la posición del barco (sin rotación → sin huecos)
+  if (river) { river.position.x = cx; river.position.z = bz; }
+  if (bankL) { bankL.position.x = cx - RIVER_WIDTH/2 - 40; bankL.position.z = bz; }
+  if (bankR) { bankR.position.x = cx + RIVER_WIDTH/2 + 40; bankR.position.z = bz; }
+
+  // Reciclar árboles que quedan detrás de la barca
+  for (const tree of trees) {
+    if (tree.position.z > bz + RECYCLE_DIST) {
+      placeTree(tree, bz - SCENERY_RANGE - Math.random() * 50);
+    }
+  }
+
+  // Reciclar montañas
+  for (const m of mountains) {
+    if (m.position.z > bz + RECYCLE_DIST) {
+      placeMountain(m, bz - SCENERY_RANGE - Math.random() * 100);
+    }
   }
 }
 
@@ -631,6 +771,7 @@ function buildRowerBody() {
 
     rower.userData['shoulder' + sideKey] = shoulder;
     rower.userData['elbow' + sideKey] = elbow;
+    rower.userData['hand' + sideKey] = hand;
   }
 
   // --- Piernas: cadera → muslo → rodilla → espinilla → pie ---
@@ -751,24 +892,19 @@ function updateRowerAnimation(dt) {
     }
   });
 
-  // --- Remos: pivotan en el oarlock ---
-  // Catch (d=0): remos hacia adelante (pala fuera del agua por la proa)
-  // Drive (d crece): remos barren el agua hacia atrás
-  // Finish (d=1): remos hacia atrás, cerca del cuerpo
-  // Recovery: vuelven a la posición de catch
+  // --- Remos: ángulos fijos sincronizados con la remada ---
+  // El remo pivota en el oarlock; su rotación sigue la fase de drive
+  const inWater = phase < 0.4 ? 1 : 0;
+
   if (oarLeft) {
-    // Rotación en X = mover la pala adelante/atrás
-    oarLeft.rotation.x = -0.8 + d * 1.5; // de -0.8 (adelante) a 0.7 (atrás)
-    // Rotación en Z = elevar/bajar la pala (fuera del agua en recovery)
-    const inWater = phase < 0.4 ? 1 : 0;
-    oarLeft.rotation.z = inWater * 0.0 + (1 - inWater) * 0.4;
-    oarLeft.rotation.y = -0.15; // ligero ángulo fijo
+    oarLeft.rotation.x = -0.8 + d * 1.5;  // catch: adelante (-0.8), finish: atrás (0.7)
+    oarLeft.rotation.y = -0.15;            // ligero ángulo horizontal
+    oarLeft.rotation.z = (1 - inWater) * 0.4; // elevar pala en recovery
   }
   if (oarRight) {
     oarRight.rotation.x = -0.8 + d * 1.5;
-    const inWater = phase < 0.4 ? 1 : 0;
-    oarRight.rotation.z = -(1 - inWater) * 0.4;
     oarRight.rotation.y = 0.15;
+    oarRight.rotation.z = -(1 - inWater) * 0.4;
   }
 
   // --- Balanceo de la barca ---
@@ -779,24 +915,214 @@ function updateRowerAnimation(dt) {
   }
 }
 
-// --- Movimiento de la barca y del mundo ---
+// --- Movimiento de la barca (delegado al modelo físico) ---
 function updateBoatMovement(dt) {
-  // speed en km/h → unidades de mundo por segundo
-  // Escalamos: 1 km/h ≈ 0.5 unidades/s (factor de diversión)
-  const worldSpeed = gameState.speed * 0.5;
-  gameState.boatZ -= worldSpeed * dt;
+  updateBoatPhysics(dt);
+}
 
-  if (boat) {
-    boat.position.z = gameState.boatZ;
+// ========================================================================
+//  BOTS — embarcaciones de referencia a velocidad constante
+// ========================================================================
+const BOT_CONFIGS = [
+  { velocity: 0.8, cadence: 20, lane: -2.5, color: 0x1565C0, name: 'Lento' },
+  { velocity: 1.5, cadence: 26, lane:  2.5, color: 0x2E7D32, name: 'Medio' },
+  { velocity: 2.2, cadence: 32, lane: -1.0, color: 0xE65100, name: 'Rápido' },
+  { velocity: 1.1, cadence: 23, lane:  1.0, color: 0x6A1B9A, name: 'Pacífico' },
+];
+
+function buildSimpleRower(hullColor, shirtColor) {
+  const skinMat = new THREE.MeshStandardMaterial({ color: 0xFFD3A5, roughness: 0.6 });
+  const shirtMat = new THREE.MeshStandardMaterial({ color: shirtColor, roughness: 0.5 });
+  const pantsMat = new THREE.MeshStandardMaterial({ color: 0x1A237E, roughness: 0.6 });
+  const hairMat = new THREE.MeshStandardMaterial({ color: 0x3E2723, roughness: 0.8 });
+
+  const group = new THREE.Group();
+  group.position.set(0, 0.2, 0.2);
+
+  const hips = new THREE.Group();
+  group.add(hips);
+
+  const hipMesh = new THREE.Mesh(new THREE.BoxGeometry(0.55, 0.22, 0.35), pantsMat);
+  hipMesh.castShadow = true;
+  hips.add(hipMesh);
+
+  const spine = new THREE.Group();
+  spine.position.y = 0.11;
+  hips.add(spine);
+
+  const torso = new THREE.Mesh(new THREE.BoxGeometry(0.58, 0.65, 0.32), shirtMat);
+  torso.position.y = 0.33;
+  torso.castShadow = true;
+  spine.add(torso);
+
+  const head = new THREE.Mesh(new THREE.SphereGeometry(0.17, 14, 12), skinMat);
+  head.position.y = 0.9;
+  head.castShadow = true;
+  spine.add(head);
+
+  const hair = new THREE.Mesh(
+    new THREE.SphereGeometry(0.185, 12, 8, 0, Math.PI * 2, 0, Math.PI * 0.55),
+    hairMat
+  );
+  hair.position.y = 0.9;
+  spine.add(hair);
+
+  const arms = [];
+  for (const side of [-1, 1]) {
+    const shoulder = new THREE.Group();
+    shoulder.position.set(side * 0.34, 0.6, 0);
+    spine.add(shoulder);
+
+    const upperArm = new THREE.Mesh(new THREE.CylinderGeometry(0.07, 0.065, 0.38, 8), shirtMat);
+    upperArm.position.y = -0.19;
+    upperArm.castShadow = true;
+    shoulder.add(upperArm);
+
+    const elbow = new THREE.Group();
+    elbow.position.y = -0.38;
+    shoulder.add(elbow);
+
+    const forearm = new THREE.Mesh(new THREE.CylinderGeometry(0.055, 0.05, 0.36, 8), skinMat);
+    forearm.position.y = -0.18;
+    forearm.castShadow = true;
+    elbow.add(forearm);
+
+    arms.push({ shoulder, elbow });
   }
 
-  // Mover el agua visualmente para dar sensación de movimiento
-  if (river) {
-    river.material.map = null;
-    // Offset UV del agua para simular corriente
-    const uvOffset = worldSpeed * dt * 0.02;
-    // Como el agua es un plano simple, movemos ligeramente la textura offset
-    // (sin textura, movemos el agua visualmente con un material que tenga efecto)
+  group.userData = { spine, hips, arms };
+  return group;
+}
+
+function buildSimpleBoat(hullColor, shirtColor) {
+  const hullMat = new THREE.MeshStandardMaterial({ color: hullColor, roughness: 0.35, metalness: 0.35, side: THREE.DoubleSide });
+  const hull = new THREE.Mesh(buildHullGeometry(), hullMat);
+  hull.castShadow = true;
+  hull.receiveShadow = true;
+
+  const deckMat = new THREE.MeshStandardMaterial({ color: hullColor, roughness: 0.4, metalness: 0.25, side: THREE.DoubleSide });
+  const deck = new THREE.Mesh(buildDeckGeometry(), deckMat);
+  deck.castShadow = true;
+  deck.receiveShadow = true;
+
+  const group = new THREE.Group();
+  group.add(hull);
+  group.add(deck);
+
+  const botRower = buildSimpleRower(hullColor, shirtColor);
+  group.add(botRower);
+  group.userData.rower = botRower;
+
+  // Remos simplificados
+  const oars = [];
+  for (const side of [-1, 1]) {
+    const oar = new THREE.Group();
+    oar.position.set(side * 0.9, 0.26, -0.15);
+
+    const shaftMat = new THREE.MeshStandardMaterial({ color: 0x5D4037, roughness: 0.6 });
+    const bladeMat = new THREE.MeshStandardMaterial({ color: 0xE65100, roughness: 0.4 });
+
+    const shaftGeom = new THREE.CylinderGeometry(0.035, 0.045, 3.0, 8);
+    shaftGeom.rotateZ(Math.PI / 2);
+    const shaft = new THREE.Mesh(shaftGeom, shaftMat);
+    shaft.position.x = side * 1.5;
+    shaft.castShadow = true;
+    oar.add(shaft);
+
+    const blade = new THREE.Mesh(new THREE.BoxGeometry(0.7, 0.03, 0.3), bladeMat);
+    blade.position.x = side * 3.35;
+    blade.castShadow = true;
+    oar.add(blade);
+
+    group.add(oar);
+    oars.push({ mesh: oar, side });
+  }
+  group.userData.oars = oars;
+
+  return group;
+}
+
+function buildBots() {
+  for (const cfg of BOT_CONFIGS) {
+    const botBoat = buildSimpleBoat(cfg.color, cfg.color);
+    botBoat.userData.velocity = cfg.velocity;
+    botBoat.userData.cadence = cfg.cadence;
+    botBoat.userData.lane = cfg.lane;
+    botBoat.userData.name = cfg.name;
+    botBoat.userData.phase = Math.random();
+    botBoat.userData.zOffset = -10 - Math.random() * 40;
+    const bz = gameState.boatZ + botBoat.userData.zOffset;
+    botBoat.position.set(riverCurveX(bz) + cfg.lane, 0, bz);
+    botBoat.rotation.y = riverHeading(bz);
+    scene.add(botBoat);
+    bots.push(botBoat);
+  }
+}
+
+function updateBots(dt) {
+  for (const bot of bots) {
+    const ud = bot.userData;
+    const cadence = ud.cadence;
+
+    if (cadence > 0) {
+      const cycleTime = 60 / cadence;
+      ud.phase = (ud.phase + dt / cycleTime) % 1;
+    }
+
+    const phase = ud.phase;
+    let drive;
+    if (phase < 0.35) {
+      drive = Math.sin((phase / 0.35) * Math.PI / 2);
+    } else {
+      drive = Math.cos(((phase - 0.35) / 0.65) * Math.PI / 2);
+    }
+    const d = drive;
+
+    // Animar remero del bot
+    const botRower = ud.rower;
+    if (botRower) {
+      if (botRower.userData.spine) {
+        botRower.userData.spine.rotation.x = -0.35 + d * 0.6;
+      }
+      if (botRower.userData.hips) {
+        botRower.userData.hips.position.z = -0.25 + d * 0.45;
+      }
+      for (const arm of botRower.userData.arms) {
+        arm.shoulder.rotation.x = 1.1 - d * 1.5;
+        arm.elbow.rotation.x = d * 1.4;
+      }
+    }
+
+    // Animar remos del bot
+    const inWater = phase < 0.4 ? 1 : 0;
+    for (const oarInfo of ud.oars) {
+      const oar = oarInfo.mesh;
+      const side = oarInfo.side;
+      oar.rotation.x = -0.8 + d * 1.5;
+      oar.rotation.y = side === -1 ? -0.15 : 0.15;
+      oar.rotation.z = (side === -1 ? 1 : -1) * (1 - inWater) * 0.4;
+    }
+
+    // Mover bot
+    bot.position.z -= ud.velocity * dt;
+
+    // Reciclar si está muy lejos delante o detrás del jugador
+    const distFromPlayer = bot.position.z - gameState.boatZ;
+    if (distFromPlayer < -120) {
+      bot.position.z = gameState.boatZ + 30 + Math.random() * 20;
+    } else if (distFromPlayer > 60) {
+      bot.position.z = gameState.boatZ - 60 - Math.random() * 30;
+    }
+
+    // Seguir la curva del río (X + heading)
+    const bz = bot.position.z;
+    const cx = riverCurveX(bz);
+    bot.position.x = cx + ud.lane;
+    bot.rotation.y = riverHeading(bz);
+
+    // Balanceo suave
+    bot.rotation.z = Math.sin(phase * Math.PI * 2) * 0.02;
+    bot.position.y = Math.sin(phase * Math.PI * 2) * 0.04 + 0.05;
   }
 }
 
@@ -805,28 +1131,31 @@ function updateCamera(dt) {
   if (!boat) return;
   const bx = boat.position.x;
   const bz = boat.position.z;
+  const heading = boat.rotation.y;
+  // Vectores local→mundo: forward apunta hacia -Z del barco rotado
+  const sinH = Math.sin(heading), cosH = Math.cos(heading);
 
   let targetX, targetY, targetZ;
   let lookX, lookY, lookZ;
 
   if (cameraMode === 0) {
-    // Trasera: detrás y por encima de la barca
-    targetX = bx;
+    // Trasera: detrás (+Z local) y por encima
+    targetX = bx + sinH * 7;
     targetY = 4;
-    targetZ = bz + 7;
-    lookX = bx; lookY = 1; lookZ = bz - 5;
+    targetZ = bz + cosH * 7;
+    lookX = bx - sinH * 5; lookY = 1; lookZ = bz - cosH * 5;
   } else if (cameraMode === 1) {
-    // Lateral
-    targetX = bx + 8;
+    // Lateral (perpendicular al rumbo)
+    targetX = bx + cosH * 8;
     targetY = 3;
-    targetZ = bz;
+    targetZ = bz - sinH * 8;
     lookX = bx; lookY = 1; lookZ = bz;
   } else {
     // Cinemática: más alta y lejana
-    targetX = bx + 3;
+    targetX = bx + sinH * 12 + cosH * 3;
     targetY = 10;
-    targetZ = bz + 12;
-    lookX = bx; lookY = 0; lookZ = bz - 10;
+    targetZ = bz + cosH * 12 - sinH * 3;
+    lookX = bx; lookY = 0; lookZ = bz - cosH * 10;
   }
 
   camera.position.x += (targetX - camera.position.x) * 0.05;
@@ -847,12 +1176,9 @@ function animate() {
 
   updateRowerAnimation(dt);
   updateBoatMovement(dt);
+  updateBots(dt);
   updateCamera(dt);
-
-  // Animar agua con pequeña oscilación
-  if (river) {
-    river.position.x = Math.sin(clock.elapsedTime * 0.5) * 0.1;
-  }
+  updateScenery();
 
   renderer.render(scene, camera);
 }
@@ -938,13 +1264,19 @@ function parseDomyosRowerData(dv) {
   const distance = distRaw * 100;
 
   // Actualizar estado del juego
-  gameState.speed = speed;
+  // La velocidad NO se asigna directamente: el modelo físico la calcula
   gameState.cadence = cadence;
   gameState.strokes = strokes;
   gameState.distance = distance;
+  lastBLEPacketTime = clock.elapsedTime;
 
-  // Actualizar HUD
-  $sSpeed.textContent = speed.toFixed(1);
+  // Detectar nueva remada vía stroke count → aplicar impulso inmediato
+  if (strokes > gameState.lastBLEStrokes) {
+    applyStrokeImpulse();
+    gameState.lastBLEStrokes = strokes;
+  }
+
+  // Actualizar HUD (la velocidad la actualiza updateBoatPhysics)
   $sCadence.textContent = cadence + ' spm';
   $sStrokes.textContent = strokes;
   $sDist.textContent = distance + ' m';
@@ -1004,8 +1336,8 @@ $btn.addEventListener('click', async () => {
     device.addEventListener('gattserverdisconnected', () => {
       setStatus('Desconectado', false);
       $btn.disabled = false;
-      gameState.speed = 0;
       gameState.cadence = 0;
+      lastBLEPacketTime = 0;
       if (keepaliveInterval) { clearInterval(keepaliveInterval); keepaliveInterval = null; }
     });
     server = await device.gatt.connect();
@@ -1022,6 +1354,25 @@ $btn.addEventListener('click', async () => {
 document.getElementById('camera-btn').addEventListener('click', () => {
   cameraMode = (cameraMode + 1) % CAM_MODES.length;
   document.getElementById('camera-btn').textContent = 'Cámara: ' + CAM_MODES[cameraMode];
+});
+
+// --- Botón remada manual (para probar sin máquina) ---
+// --- Botón remada manual (para probar sin máquina) ---
+document.getElementById('stroke-btn').addEventListener('click', () => {
+  gameState.strokes++;
+  // Aplicar impulso físico
+  applyStrokeImpulse();
+  // Simular cadencia para la animación (se mantiene un rato)
+  gameState.cadence = 28;
+  $sStrokes.textContent = gameState.strokes;
+  $sCadence.textContent = gameState.cadence + ' spm';
+
+  // Decaer la cadencia tras 4s sin nuevos impulsos
+  if (window._strokeTimer) clearTimeout(window._strokeTimer);
+  window._strokeTimer = setTimeout(() => {
+    gameState.cadence = 0;
+    $sCadence.textContent = '0 spm';
+  }, 4000);
 });
 
 // --- Arrancar ---
