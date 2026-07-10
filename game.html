@@ -1,0 +1,653 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Rowing at Home — 3D</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    html, body { width: 100%; height: 100%; overflow: hidden; }
+    body { background: #87CEEB; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
+    canvas { display: block; }
+
+    #hud {
+      position: fixed; top: 0; left: 0; right: 0; z-index: 10;
+      display: flex; justify-content: space-between; align-items: flex-start;
+      padding: 16px 20px; pointer-events: none;
+    }
+    #hud-left, #hud-right {
+      background: rgba(10, 20, 40, 0.65); backdrop-filter: blur(8px);
+      border-radius: 12px; padding: 14px 18px; color: #eee;
+      font-size: 14px; line-height: 1.6;
+      pointer-events: auto;
+    }
+    #hud-left { min-width: 200px; }
+    #hud-right { text-align: right; font-family: "SF Mono", Monaco, Consolas, monospace; font-size: 12px; max-width: 320px; max-height: 280px; overflow: hidden; }
+    .stat-row { display: flex; justify-content: space-between; gap: 16px; }
+    .stat-label { color: #8ab; }
+    .stat-value { font-weight: bold; }
+    .stat-big { font-size: 20px; color: #4ecca3; }
+    .disconnected { color: #e94560; }
+    .connected { color: #4ecca3; }
+
+    #controls {
+      position: fixed; bottom: 0; left: 0; right: 0; z-index: 10;
+      display: flex; justify-content: center; gap: 12px;
+      padding: 16px 20px; pointer-events: none;
+    }
+    #connect-btn, #camera-btn {
+      pointer-events: auto;
+      padding: 12px 28px; font-size: 15px;
+      border: none; border-radius: 8px; cursor: pointer;
+      background: #0f3460; color: #fff; transition: background .2s;
+    }
+    #connect-btn:hover { background: #1a4a8a; }
+    #connect-btn:disabled { opacity: .5; cursor: default; }
+    #camera-btn { background: #2a2a4e; }
+    #camera-btn:hover { background: #3a3a6e; }
+
+    #log {
+      font-family: "SF Mono", Monaco, Consolas, monospace; font-size: 11px;
+      color: #8ab; white-space: pre-wrap; word-break: break-all; max-height: 200px; overflow-y: auto;
+    }
+    #log .hex { color: #4ecca3; }
+    #log .cmd { color: #6ab0f3; }
+    #log .svc { color: #e94560; }
+  </style>
+  <script type="importmap">
+  {
+    "imports": {
+      "three": "https://unpkg.com/three@0.160.0/build/three.module.js"
+    }
+  }
+  </script>
+</head>
+<body>
+
+<div id="hud">
+  <div id="hud-left">
+    <div class="stat-row"><span class="stat-label">Velocidad</span><span class="stat-value stat-big" id="s-speed">0.0</span></div>
+    <div class="stat-row"><span class="stat-label">km/h</span><span class="stat-value stat-label" id="s-speed-unit">&nbsp;</span></div>
+    <div class="stat-row"><span class="stat-label">Cadencia</span><span class="stat-value" id="s-cadence">0 spm</span></div>
+    <div class="stat-row"><span class="stat-label">Remadas</span><span class="stat-value" id="s-strokes">0</span></div>
+    <div class="stat-row"><span class="stat-label">Distancia</span><span class="stat-value" id="s-distance">0 m</span></div>
+    <div class="stat-row"><span class="stat-label">Estado</span><span class="stat-value disconnected" id="s-status">Desconectado</span></div>
+  </div>
+  <div id="hud-right">
+    <div id="log"></div>
+  </div>
+</div>
+
+<div id="controls">
+  <button id="connect-btn">Conectar a la máquina</button>
+  <button id="camera-btn">Cámara</button>
+</div>
+
+<script type="module">
+import * as THREE from 'three';
+
+// ========================================================================
+//  THREE.JS — ESCENA LOW-POLY
+// ========================================================================
+
+let scene, camera, renderer, clock;
+let boat, rower, oarLeft, oarRight, river;
+const riverSegments = [];
+let cameraMode = 0; // 0: chase, 1: side, 2: cinematic
+const CAM_MODES = ['Trasera', 'Lateral', 'Cinemática'];
+
+// Estado del juego alimentado por BLE
+const gameState = {
+  speed: 0,          // km/h
+  cadence: 0,        // spm
+  strokes: 0,
+  distance: 0,       // metros (BLE)
+  boatZ: 0,          // posicion virtual del barco (world units)
+  strokePhase: 0,    // 0..1 fase de la remada actual
+  lastStrokeTime: 0,
+};
+
+function initThree() {
+  scene = new THREE.Scene();
+  scene.background = new THREE.Color(0x87CEEB);
+  scene.fog = new THREE.Fog(0x87CEEB, 80, 300);
+
+  camera = new THREE.PerspectiveCamera(60, window.innerWidth / window.innerHeight, 0.1, 600);
+  camera.position.set(0, 6, 10);
+
+  renderer = new THREE.WebGLRenderer({ antialias: true });
+  renderer.setSize(window.innerWidth, window.innerHeight);
+  renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+  renderer.shadowMap.enabled = true;
+  renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+  document.body.appendChild(renderer.domElement);
+
+  clock = new THREE.Clock();
+
+  // Luces
+  const ambient = new THREE.AmbientLight(0xffffff, 0.6);
+  scene.add(ambient);
+
+  const sun = new THREE.DirectionalLight(0xfff5e0, 1.0);
+  sun.position.set(30, 50, -20);
+  sun.castShadow = true;
+  sun.shadow.mapSize.set(2048, 2048);
+  sun.shadow.camera.left = -40;
+  sun.shadow.camera.right = 40;
+  sun.shadow.camera.top = 40;
+  sun.shadow.camera.bottom = -40;
+  sun.shadow.camera.near = 1;
+  sun.shadow.camera.far = 150;
+  scene.add(sun);
+
+  buildRiver();
+  buildBoat();
+
+  window.addEventListener('resize', onResize);
+  animate();
+}
+
+// --- Río ---
+const RIVER_WIDTH = 14;
+const SEGMENT_LENGTH = 20;
+const NUM_SEGMENTS = 30;
+
+function buildRiver() {
+  // Agua
+  const waterGeom = new THREE.PlaneGeometry(RIVER_WIDTH, SEGMENT_LENGTH * NUM_SEGMENTS, 1, 1);
+  const waterMat = new THREE.MeshStandardMaterial({
+    color: 0x2E86C1, roughness: 0.3, metalness: 0.6,
+  });
+  river = new THREE.Mesh(waterGeom, waterMat);
+  river.rotation.x = -Math.PI / 2;
+  river.position.z = -(SEGMENT_LENGTH * NUM_SEGMENTS) / 2 + SEGMENT_LENGTH;
+  river.receiveShadow = true;
+  scene.add(river);
+
+  // Orillas (low-poly: bloques verdes a los lados)
+  const bankGeom = new THREE.BoxGeometry(50, 3, SEGMENT_LENGTH * NUM_SEGMENTS);
+  const bankMat = new THREE.MeshStandardMaterial({ color: 0x2E7D32, roughness: 0.9 });
+
+  const bankL = new THREE.Mesh(bankGeom, bankMat);
+  bankL.position.set(-RIVER_WIDTH/2 - 25, -1, -(SEGMENT_LENGTH * NUM_SEGMENTS)/2 + SEGMENT_LENGTH);
+  bankL.receiveShadow = true;
+  bankL.castShadow = true;
+  scene.add(bankL);
+
+  const bankR = new THREE.Mesh(bankGeom, bankMat);
+  bankR.position.set(RIVER_WIDTH/2 + 25, -1, -(SEGMENT_LENGTH * NUM_SEGMENTS)/2 + SEGMENT_LENGTH);
+  bankR.receiveShadow = true;
+  bankR.castShadow = true;
+  scene.add(bankR);
+
+  // Árboles low-poly dispersos en las orillas
+  const trunkGeom = new THREE.CylinderGeometry(0.3, 0.4, 3, 6);
+  const trunkMat = new THREE.MeshStandardMaterial({ color: 0x5D4037 });
+  const foliageGeom = new THREE.ConeGeometry(2, 5, 7);
+  const foliageMat1 = new THREE.MeshStandardMaterial({ color: 0x388E3C });
+  const foliageMat2 = new THREE.MeshStandardMaterial({ color: 0x43A047 });
+  const foliageMat3 = new THREE.MeshStandardMaterial({ color: 0x2E7D32 });
+
+  for (let i = 0; i < 80; i++) {
+    const tree = new THREE.Group();
+    const trunk = new THREE.Mesh(trunkGeom, trunkMat);
+    trunk.position.y = 1.5;
+    trunk.castShadow = true;
+    tree.add(trunk);
+
+    const foliage = new THREE.Mesh(foliageGeom, [foliageMat1, foliageMat2, foliageMat3][i % 3]);
+    foliage.position.y = 5;
+    foliage.castShadow = true;
+    tree.add(foliage);
+
+    const side = i % 2 === 0 ? -1 : 1;
+    tree.position.x = side * (RIVER_WIDTH/2 + 8 + Math.random() * 30);
+    tree.position.z = -i * 12 - Math.random() * 10;
+    tree.scale.setScalar(0.7 + Math.random() * 0.6);
+    tree.rotation.y = Math.random() * Math.PI;
+    scene.add(tree);
+  }
+
+  // Niebla / montañas lejanas (decorado de fondo)
+  const mountainGeom = new THREE.ConeGeometry(40, 25, 5);
+  const mountainMat = new THREE.MeshStandardMaterial({ color: 0x7986CB, roughness: 1, flatShading: true });
+  for (let i = 0; i < 8; i++) {
+    const m = new THREE.Mesh(mountainGeom, mountainMat);
+    const side = i % 2 === 0 ? -1 : 1;
+    m.position.set(side * (60 + Math.random() * 40), 8, -i * 60 - 40);
+    m.scale.set(1 + Math.random(), 0.8 + Math.random() * 0.5, 1);
+    scene.add(m);
+  }
+}
+
+// --- Barca ---
+function buildBoat() {
+  boat = new THREE.Group();
+
+  // Casco (low-poly: forma de barca)
+  const hullGeom = new THREE.ConeGeometry(1.2, 4, 6);
+  hullGeom.rotateX(Math.PI / 2);
+  const hullMat = new THREE.MeshStandardMaterial({ color: 0x8D6E63, roughness: 0.7, flatShading: true });
+  const hull = new THREE.Mesh(hullGeom, hullMat);
+  hull.scale.set(1, 0.6, 1);
+  hull.position.y = 0.2;
+  hull.castShadow = true;
+  boat.add(hull);
+
+  // Interior de la barca
+  const innerGeom = new THREE.ConeGeometry(0.9, 3.5, 6);
+  innerGeom.rotateX(Math.PI / 2);
+  const innerMat = new THREE.MeshStandardMaterial({ color: 0x5D4037, roughness: 0.8, flatShading: true });
+  const inner = new THREE.Mesh(innerGeom, innerMat);
+  inner.scale.set(1, 0.5, 1);
+  inner.position.y = 0.35;
+  boat.add(inner);
+
+  // Bancos
+  const seatGeom = new THREE.BoxGeometry(0.8, 0.1, 0.4);
+  const seatMat = new THREE.MeshStandardMaterial({ color: 0x6D4C41 });
+  const seat = new THREE.Mesh(seatGeom, seatMat);
+  seat.position.set(0, 0.45, 0);
+  boat.add(seat);
+
+  // Punto de pivote para el remero
+  rower = new THREE.Group();
+  rower.position.set(0, 0.5, 0);
+  boat.add(rower);
+  buildRowerBody();
+
+  // Remos
+  oarLeft = buildOar();
+  oarLeft.position.set(-0.9, 0.7, -0.2);
+  oarLeft.userData.side = -1;
+  boat.add(oarLeft);
+
+  oarRight = buildOar();
+  oarRight.position.set(0.9, 0.7, -0.2);
+  oarRight.userData.side = 1;
+  boat.add(oarRight);
+
+  boat.position.set(0, 0, 0);
+  scene.add(boat);
+}
+
+// --- Remo (pivot en la mano, palo hacia fuera) ---
+function buildOar() {
+  const oar = new THREE.Group();
+  // Mango
+  const handleGeom = new THREE.CylinderGeometry(0.05, 0.05, 1.2, 6);
+  handleGeom.rotateZ(Math.PI / 2);
+  const handleMat = new THREE.MeshStandardMaterial({ color: 0x4E342E });
+  const handle = new THREE.Mesh(handleGeom, handleMat);
+  handle.position.x = 0.6;
+  oar.add(handle);
+  // Pala
+  const bladeGeom = new THREE.BoxGeometry(0.8, 0.02, 0.25);
+  const bladeMat = new THREE.MeshStandardMaterial({ color: 0xE65100, flatShading: true });
+  const blade = new THREE.Mesh(bladeGeom, bladeMat);
+  blade.position.set(1.6, 0, 0);
+  oar.add(blade);
+  return oar;
+}
+
+// --- Personaje remero low-poly ---
+function buildRowerBody() {
+  const skinMat = new THREE.MeshStandardMaterial({ color: 0xFFCC80, flatShading: true });
+  const shirtMat = new THREE.MeshStandardMaterial({ color: 0x1565C0, flatShading: true });
+  const pantsMat = new THREE.MeshStandardMaterial({ color: 0x37474F, flatShading: true });
+
+  // Torso
+  const torsoGeom = new THREE.BoxGeometry(0.6, 0.7, 0.35);
+  const torso = new THREE.Mesh(torsoGeom, shirtMat);
+  torso.position.y = 0.35;
+  torso.castShadow = true;
+  rower.add(torso);
+
+  // Cabeza
+  const headGeom = new THREE.SphereGeometry(0.18, 8, 6);
+  const head = new THREE.Mesh(headGeom, skinMat);
+  head.position.y = 0.85;
+  head.castShadow = true;
+  rower.add(head);
+
+  // Piernas (estiradas hacia adelante, posición de remo)
+  const legGeom = new THREE.BoxGeometry(0.2, 0.2, 0.8);
+  const legL = new THREE.Mesh(legGeom, pantsMat);
+  legL.position.set(-0.15, 0.1, 0.4);
+  legL.castShadow = true;
+  rower.add(legL);
+  const legR = new THREE.Mesh(legGeom, pantsMat);
+  legR.position.set(0.15, 0.1, 0.4);
+  legR.castShadow = true;
+  rower.add(legR);
+
+  // Brazos (pivot en el hombro para animar)
+  const armGeom = new THREE.BoxGeometry(0.15, 0.15, 0.6);
+  armGeom.translate(0, 0, 0.3);
+
+  // Hombro izquierdo
+  const shoulderL = new THREE.Group();
+  shoulderL.position.set(-0.35, 0.6, 0);
+  const armL = new THREE.Mesh(armGeom, skinMat);
+  armL.castShadow = true;
+  shoulderL.add(armL);
+  rower.add(shoulderL);
+  rower.userData.shoulderL = shoulderL;
+
+  // Hombro derecho
+  const shoulderR = new THREE.Group();
+  shoulderR.position.set(0.35, 0.6, 0);
+  const armR = new THREE.Mesh(armGeom, skinMat);
+  armR.castShadow = true;
+  shoulderR.add(armR);
+  rower.add(shoulderR);
+  rower.userData.shoulderR = shoulderR;
+}
+
+// --- Animación remada ---
+function updateRowerAnimation(dt) {
+  const cadence = gameState.cadence;
+  if (cadence > 0) {
+    // Una remada completa = 2 fases (tirón + recuperación)
+    // Tiempo de un ciclo = 60 / cadencia segundos
+    const cycleTime = 60 / cadence;
+    gameState.strokePhase += dt / cycleTime;
+    gameState.strokePhase = gameState.strokePhase % 1;
+  } else {
+    // Sin cadencia: volver a posición neutra lentamente
+    gameState.strokePhase = gameState.strokePhase * 0.9;
+  }
+
+  const phase = gameState.strokePhase;
+  // Curva sinusoidal: 0 = reposo, pico = 1 al final del tirón
+  // Fase 0..0.4 = tirón (cuerpo se inclina atrás, remos hacia dentro)
+  // Fase 0.4..1 = recuperación (vuelve adelante)
+  let stroke;
+  if (phase < 0.4) {
+    stroke = Math.sin((phase / 0.4) * Math.PI / 2); // 0..1
+  } else {
+    stroke = Math.cos(((phase - 0.4) / 0.6) * Math.PI / 2); // 1..0
+  }
+
+  // Inclinar torso hacia atrás durante el tirón
+  if (rower) {
+    rower.rotation.x = -stroke * 0.5; // inclinar atrás
+  }
+
+  // Mover brazos (hombros)
+  if (rower.userData.shoulderL) {
+    rower.userData.shoulderL.rotation.x = -stroke * 0.8;
+  }
+  if (rower.userData.shoulderR) {
+    rower.userData.shoulderR.rotation.x = -stroke * 0.8;
+  }
+
+  // Mover remos: rotar como palanca
+  // En el tirón los remos van hacia atrás (pala en el agua), en recuperación vuelven
+  if (oarLeft) {
+    oarLeft.rotation.y = stroke * 0.6;
+    oarLeft.rotation.x = -stroke * 0.3;
+  }
+  if (oarRight) {
+    oarRight.rotation.y = -stroke * 0.6;
+    oarRight.rotation.x = -stroke * 0.3;
+  }
+
+  // Pequeño balanceo de la barca
+  if (boat) {
+    boat.rotation.z = Math.sin(phase * Math.PI * 2) * 0.03;
+    boat.position.y = Math.sin(phase * Math.PI * 2) * 0.05;
+  }
+}
+
+// --- Movimiento de la barca y del mundo ---
+function updateBoatMovement(dt) {
+  // speed en km/h → unidades de mundo por segundo
+  // Escalamos: 1 km/h ≈ 0.5 unidades/s (factor de diversión)
+  const worldSpeed = gameState.speed * 0.5;
+  gameState.boatZ -= worldSpeed * dt;
+
+  if (boat) {
+    boat.position.z = gameState.boatZ;
+  }
+
+  // Mover el agua visualmente para dar sensación de movimiento
+  if (river) {
+    river.material.map = null;
+    // Offset UV del agua para simular corriente
+    const uvOffset = worldSpeed * dt * 0.02;
+    // Como el agua es un plano simple, movemos ligeramente la textura offset
+    // (sin textura, movemos el agua visualmente con un material que tenga efecto)
+  }
+}
+
+// --- Cámara ---
+function updateCamera(dt) {
+  if (!boat) return;
+  const bx = boat.position.x;
+  const bz = boat.position.z;
+
+  let targetX, targetY, targetZ;
+  let lookX, lookY, lookZ;
+
+  if (cameraMode === 0) {
+    // Trasera: detrás y por encima de la barca
+    targetX = bx;
+    targetY = 4;
+    targetZ = bz + 7;
+    lookX = bx; lookY = 1; lookZ = bz - 5;
+  } else if (cameraMode === 1) {
+    // Lateral
+    targetX = bx + 8;
+    targetY = 3;
+    targetZ = bz;
+    lookX = bx; lookY = 1; lookZ = bz;
+  } else {
+    // Cinemática: más alta y lejana
+    targetX = bx + 3;
+    targetY = 10;
+    targetZ = bz + 12;
+    lookX = bx; lookY = 0; lookZ = bz - 10;
+  }
+
+  camera.position.x += (targetX - camera.position.x) * 0.05;
+  camera.position.y += (targetY - camera.position.y) * 0.05;
+  camera.position.z += (targetZ - camera.position.z) * 0.05;
+  camera.lookAt(lookX, lookY, lookZ);
+}
+
+function onResize() {
+  camera.aspect = window.innerWidth / window.innerHeight;
+  camera.updateProjectionMatrix();
+  renderer.setSize(window.innerWidth, window.innerHeight);
+}
+
+function animate() {
+  requestAnimationFrame(animate);
+  const dt = Math.min(clock.getDelta(), 0.1);
+
+  updateRowerAnimation(dt);
+  updateBoatMovement(dt);
+  updateCamera(dt);
+
+  // Animar agua con pequeña oscilación
+  if (river) {
+    river.position.x = Math.sin(clock.elapsedTime * 0.5) * 0.1;
+  }
+
+  renderer.render(scene, camera);
+}
+
+// ========================================================================
+//  BLUETOOTH — Reutilizado de index.html
+// ========================================================================
+
+const uuid = (n) => '0000' + n.toString(16).padStart(4,'0') + '-0000-1000-8000-00805f9b34fb';
+const DOMYOS_SERVICE_UUID = '49535343-fe7d-4ae5-8fa9-9fafd205e455';
+const DOMYOS_NOTIFY_UUID   = '49535343-1e4d-4bd9-ba61-23c647249616';
+const DOMYOS_WRITE_UUID    = '49535343-8841-43f4-a8d4-ecbe34729bb3';
+const DEVICE_INFO_SERVICE_UUID = uuid(0x180a);
+
+const $btn     = document.getElementById('connect-btn');
+const $log     = document.getElementById('log');
+const $sSpeed  = document.getElementById('s-speed');
+const $sCadence= document.getElementById('s-cadence');
+const $sStrokes= document.getElementById('s-strokes');
+const $sDist   = document.getElementById('s-distance');
+const $sStatus = document.getElementById('s-status');
+
+let device = null, server = null, writeChar = null, notifyChar = null;
+let keepaliveInterval = null;
+
+function setStatus(msg, ok) {
+  $sStatus.textContent = msg;
+  $sStatus.className = 'stat-value ' + (ok ? 'connected' : 'disconnected');
+}
+function logRaw(cls, text) {
+  const now = new Date().toLocaleTimeString('es-ES', { hour12: false });
+  const line = document.createElement('div');
+  line.innerHTML = `<span class="${cls}">${now} ${text}</span>`;
+  $log.appendChild(line);
+  $log.scrollTop = $log.scrollHeight;
+  while ($log.children.length > 50) $log.removeChild($log.firstChild);
+}
+function toHex(buf) {
+  return [...new Uint8Array(buf)].map(b => b.toString(16).padStart(2,'0')).join(' ');
+}
+function checksum(bytes) { return bytes.reduce((a, b) => a + b, 0) & 0xFF; }
+
+async function sendCommand(bytes) {
+  if (!writeChar) return;
+  const cmd = new Uint8Array(bytes);
+  logRaw('cmd', `>>> TX: ${toHex(cmd.buffer)}`);
+  try { await writeChar.writeValue(cmd); }
+  catch(e) { logRaw('cmd', `Error: ${e.message}`); }
+}
+
+const INIT_COMMANDS = [
+  [0xF0, 0xA3, 0x93],
+  [0xF0, 0xA4, 0x94],
+  [0xF0, 0xA5, 0x95],
+  [0xF0, 0xAB, 0x9B],
+];
+
+async function sendInitSequence() {
+  logRaw('svc', '=== Init ===');
+  for (const cmd of INIT_COMMANDS) {
+    await sendCommand(cmd);
+    await new Promise(r => setTimeout(r, 100));
+  }
+  if (keepaliveInterval) clearInterval(keepaliveInterval);
+  keepaliveInterval = setInterval(() => sendCommand([0xF0, 0xAC, 0x9C]), 300);
+  logRaw('svc', 'Keepalive iniciado');
+}
+
+function parseDomyosRowerData(dv) {
+  const bytes = new Uint8Array(dv.buffer);
+  if (bytes.length < 20 || bytes[0] !== 0xF0) return null;
+
+  const strokes = (bytes[2] << 8) | bytes[3];
+  const pace = (bytes[6] << 8) | bytes[7];
+  const cadence = bytes[9];
+  const distRaw = (bytes[12] << 8) | bytes[13];
+
+  let speed = 0;
+  if (pace > 0 && pace < 0xFFFF) {
+    speed = parseFloat(((60 / pace) * 30).toFixed(1));
+  }
+
+  const distance = distRaw * 100;
+
+  // Actualizar estado del juego
+  gameState.speed = speed;
+  gameState.cadence = cadence;
+  gameState.strokes = strokes;
+  gameState.distance = distance;
+
+  // Actualizar HUD
+  $sSpeed.textContent = speed.toFixed(1);
+  $sCadence.textContent = cadence + ' spm';
+  $sStrokes.textContent = strokes;
+  $sDist.textContent = distance + ' m';
+
+  return true;
+}
+
+function onDomyosNotify(e) {
+  const dv = e.target.value;
+  const bytes = new Uint8Array(dv.buffer);
+  logRaw('hex', `<<< RX [${bytes.length}B]: ${toHex(dv.buffer)}`);
+  if (bytes.length === 26 && bytes[0] === 0xF0) {
+    try { parseDomyosRowerData(dv); } catch(err) {
+      logRaw('hex', `(parse error: ${err.message})`);
+    }
+  }
+}
+
+async function exploreServer(server) {
+  logRaw('svc', 'Buscando servicio Domyos...');
+  try {
+    const svc = await server.getPrimaryService(DOMYOS_SERVICE_UUID);
+    logRaw('svc', 'Servicio Domyos encontrado');
+    await setupDomyosService(svc);
+  } catch(err) {
+    logRaw('svc', `getPrimaryService falló: ${err.message}`);
+  }
+}
+
+async function setupDomyosService(svc) {
+  const chars = await svc.getCharacteristics();
+  for (const ch of chars) {
+    if (ch.uuid === DOMYOS_NOTIFY_UUID) {
+      notifyChar = ch;
+      ch.addEventListener('characteristicvaluechanged', onDomyosNotify);
+      await ch.startNotifications();
+      logRaw('svc', 'Suscrito a Notify');
+    }
+    if (ch.uuid === DOMYOS_WRITE_UUID) {
+      writeChar = ch;
+      logRaw('svc', 'Write characteristic lista');
+    }
+  }
+  if (writeChar) await sendInitSequence();
+}
+
+// --- Botón conectar ---
+$btn.addEventListener('click', async () => {
+  try {
+    $btn.disabled = true;
+    setStatus('Solicitando Bluetooth...', false);
+    device = await navigator.bluetooth.requestDevice({
+      acceptAllDevices: true,
+      optionalServices: [DOMYOS_SERVICE_UUID, DEVICE_INFO_SERVICE_UUID]
+    });
+    setStatus('Conectando...', false);
+    device.addEventListener('gattserverdisconnected', () => {
+      setStatus('Desconectado', false);
+      $btn.disabled = false;
+      gameState.speed = 0;
+      gameState.cadence = 0;
+      if (keepaliveInterval) { clearInterval(keepaliveInterval); keepaliveInterval = null; }
+    });
+    server = await device.gatt.connect();
+    setStatus('Conectado', true);
+    await exploreServer(server);
+    setStatus('Remando', true);
+  } catch (err) {
+    setStatus('Error: ' + err.message, false);
+    $btn.disabled = false;
+  }
+});
+
+// --- Botón cámara ---
+document.getElementById('camera-btn').addEventListener('click', () => {
+  cameraMode = (cameraMode + 1) % CAM_MODES.length;
+  document.getElementById('camera-btn').textContent = 'Cámara: ' + CAM_MODES[cameraMode];
+});
+
+// --- Arrancar ---
+initThree();
+setStatus('Desconectado', false);
+</script>
+</body>
+</html>
