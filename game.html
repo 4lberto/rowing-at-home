@@ -8,7 +8,7 @@
     * { margin: 0; padding: 0; box-sizing: border-box; }
     html, body { width: 100%; height: 100%; overflow: hidden; }
     body { background: #87CEEB; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
-    canvas { display: block; }
+    canvas { display: block; position: relative; z-index: 0; }
 
     #hud {
       position: fixed; top: 0; left: 0; right: 0; z-index: 10;
@@ -35,16 +35,109 @@
       display: flex; justify-content: center; gap: 12px;
       padding: 16px 20px; pointer-events: none;
     }
-    #connect-btn, #camera-btn, #stroke-btn {
+    #connect-btn, #camera-btn, #stroke-btn, #stop-btn {
       pointer-events: auto;
       padding: 12px 28px; font-size: 15px;
       border: none; border-radius: 8px; cursor: pointer;
       background: #0f3460; color: #fff; transition: background .2s;
     }
-    #connect-btn:hover, #camera-btn:hover, #stroke-btn:hover { background: #1a4a8a; }
-    #connect-btn:disabled, #camera-btn:disabled, #stroke-btn:disabled { opacity: .5; cursor: default; }
-    #camera-btn, #stroke-btn { background: #2a2a4e; }
-    #camera-btn:hover, #stroke-btn:hover { background: #3a3a6e; }
+    #connect-btn:hover, #camera-btn:hover, #stroke-btn:hover, #stop-btn:hover { background: #1a4a8a; }
+    #connect-btn:disabled, #camera-btn:disabled, #stroke-btn:disabled, #stop-btn:disabled { opacity: .5; cursor: default; }
+    #camera-btn, #stroke-btn, #stop-btn { background: #2a2a4e; }
+    #camera-btn:hover, #stroke-btn:hover, #stop-btn:hover { background: #3a3a6e; }
+
+    #pause-overlay {
+      position: fixed; inset: 0; z-index: 50;
+      display: none; flex-direction: column;
+      align-items: center; justify-content: center;
+      background: rgba(5, 10, 25, 0.8); backdrop-filter: blur(6px);
+    }
+    #pause-overlay.visible { display: flex; }
+    #pause-menu {
+      background: rgba(15, 25, 50, 0.95);
+      border: 1px solid #2a3a5e;
+      border-radius: 16px; padding: 40px 48px;
+      text-align: center; min-width: 320px;
+    }
+    #pause-menu h2 { color: #e9c46a; font-size: 28px; margin-bottom: 24px; }
+    #pause-menu .summary { color: #8ab; font-size: 14px; margin-bottom: 24px; line-height: 1.8; }
+    #pause-menu .summary span { color: #4ecca3; font-weight: bold; }
+    .pause-btn {
+      display: block; width: 100%; margin: 8px 0;
+      padding: 14px 24px; font-size: 16px;
+      border: none; border-radius: 10px; cursor: pointer;
+      color: #fff; transition: background .2s;
+    }
+    .pause-btn:hover { opacity: 0.85; }
+    #btn-resume { background: #0f3460; }
+    #btn-save   { background: #2a5a2a; }
+    #btn-list   { background: #4a3a6e; }
+    #btn-reset  { background: #5a1a2e; }
+
+    /* --- Diálogo de nombre para guardar --- */
+    #save-name-overlay {
+      position: fixed; inset: 0; z-index: 60;
+      display: none; flex-direction: column;
+      align-items: center; justify-content: center;
+      background: rgba(5, 10, 25, 0.85); backdrop-filter: blur(6px);
+    }
+    #save-name-overlay.visible { display: flex; }
+    #save-name-box {
+      background: rgba(15, 25, 50, 0.95);
+      border: 1px solid #2a3a5e;
+      border-radius: 16px; padding: 36px 40px;
+      text-align: center; min-width: 340px;
+    }
+    #save-name-box h3 { color: #e9c46a; font-size: 20px; margin-bottom: 20px; }
+    #save-name-input {
+      width: 100%; padding: 12px 16px; font-size: 16px;
+      border: 1px solid #3a4a6e; border-radius: 8px;
+      background: #0a1530; color: #eee; margin-bottom: 16px;
+      box-sizing: border-box;
+    }
+    #save-name-input:focus { outline: none; border-color: #4ecca3; }
+    #save-name-box .pause-btn { margin: 6px 0; }
+    #btn-save-confirm { background: #2a5a2a; }
+    #btn-save-cancel { background: #5a1a2e; }
+
+    /* --- Lista de entrenamientos guardados --- */
+    #saves-list-overlay {
+      position: fixed; inset: 0; z-index: 60;
+      display: none; flex-direction: column;
+      align-items: center; justify-content: center;
+      background: rgba(5, 10, 25, 0.85); backdrop-filter: blur(6px);
+    }
+    #saves-list-overlay.visible { display: flex; }
+    #saves-list-box {
+      background: rgba(15, 25, 50, 0.95);
+      border: 1px solid #2a3a5e;
+      border-radius: 16px; padding: 36px 40px;
+      min-width: 460px; max-width: 600px; max-height: 80vh;
+      overflow-y: auto;
+    }
+    #saves-list-box h3 { color: #e9c46a; font-size: 20px; margin-bottom: 20px; text-align: center; }
+    .save-entry {
+      background: rgba(20, 35, 65, 0.8);
+      border: 1px solid #2a3a5e;
+      border-radius: 10px; padding: 14px 18px;
+      margin-bottom: 10px; display: flex;
+      align-items: center; gap: 12px;
+    }
+    .save-info { flex: 1; min-width: 0; }
+    .save-name { color: #4ecca3; font-weight: bold; font-size: 15px; }
+    .save-date { color: #8ab; font-size: 12px; }
+    .save-stats { color: #ccc; font-size: 12px; margin-top: 4px; }
+    .save-actions { display: flex; gap: 6px; flex-shrink: 0; }
+    .save-actions button {
+      padding: 8px 12px; font-size: 13px;
+      border: none; border-radius: 6px; cursor: pointer;
+      color: #fff; transition: opacity .2s;
+    }
+    .save-actions button:hover { opacity: 0.8; }
+    .btn-load-save { background: #0f3460; }
+    .btn-export-save { background: #2a5a2a; }
+    .btn-delete-save { background: #5a1a2e; }
+    #saves-empty { color: #8ab; text-align: center; padding: 30px; font-size: 14px; }
 
     #log {
       font-family: "SF Mono", Monaco, Consolas, monospace; font-size: 11px;
@@ -71,6 +164,11 @@
     <div class="stat-row"><span class="stat-label">Cadencia</span><span class="stat-value" id="s-cadence">0 spm</span></div>
     <div class="stat-row"><span class="stat-label">Remadas</span><span class="stat-value" id="s-strokes">0</span></div>
     <div class="stat-row"><span class="stat-label">Distancia</span><span class="stat-value" id="s-distance">0 m</span></div>
+    <div class="stat-row"><span class="stat-label">Tiempo</span><span class="stat-value" id="s-time">00:00:00</span></div>
+    <div class="stat-row"><span class="stat-label">Resistencia</span><span class="stat-value" id="s-resistance">—</span></div>
+    <div class="stat-row"><span class="stat-label">Calorías</span><span class="stat-value" id="s-calories">0 kcal</span></div>
+    <div class="stat-row"><span class="stat-label">Pulsaciones</span><span class="stat-value" id="s-hr">—</span></div>
+    <div class="stat-row"><span class="stat-label">Inclinación</span><span class="stat-value" id="s-incl">—</span></div>
     <div class="stat-row"><span class="stat-label">Estado</span><span class="stat-value disconnected" id="s-status">Desconectado</span></div>
   </div>
   <div id="hud-right">
@@ -82,6 +180,35 @@
   <button id="connect-btn">Conectar a la máquina</button>
   <button id="camera-btn">Cámara</button>
   <button id="stroke-btn">+1 Remada</button>
+  <button id="stop-btn">⏸ Pausa</button>
+</div>
+
+<div id="pause-overlay">
+  <div id="pause-menu">
+    <h2>Pausa</h2>
+    <div class="summary" id="pause-summary"></div>
+    <button class="pause-btn" id="btn-resume">▶ Reanudar</button>
+    <button class="pause-btn" id="btn-save">💾 Guardar progreso</button>
+    <button class="pause-btn" id="btn-list">📋 Mis entrenamientos</button>
+    <button class="pause-btn" id="btn-reset">🗑 Empezar de cero</button>
+  </div>
+</div>
+
+<div id="save-name-overlay">
+  <div id="save-name-box">
+    <h3>Nombre del entrenamiento</h3>
+    <input type="text" id="save-name-input" placeholder="Ej: Sesión matinal 5km" maxlength="60">
+    <button class="pause-btn" id="btn-save-confirm">✓ Guardar</button>
+    <button class="pause-btn" id="btn-save-cancel">✕ Cancelar</button>
+  </div>
+</div>
+
+<div id="saves-list-overlay">
+  <div id="saves-list-box">
+    <h3>Entrenamientos guardados</h3>
+    <div id="saves-list"></div>
+    <button class="pause-btn" id="btn-saves-close" style="margin-top:16px; background:#5a1a2e;">✕ Cerrar</button>
+  </div>
 </div>
 
 <script type="module">
@@ -92,11 +219,265 @@ import * as THREE from 'three';
 // ========================================================================
 
 let scene, camera, renderer, clock;
-let boat, rower, oarLeft, oarRight, river, bankL, bankR;
+let boat, rower, oarLeft, oarRight;
 const riverSegments = [];
 let cameraMode = 0; // 0: chase, 1: side, 2: cinematic
 const CAM_MODES = ['Trasera', 'Lateral', 'Cinemática'];
 const bots = [];
+let paused = false;
+
+// ========================================================================
+//  SISTEMA DE GUARDADO — N entrenamientos con nombre y fecha
+// ========================================================================
+const SAVE_PREFIX = 'rowingAtHome_save_';
+
+function getAllSaves() {
+  const saves = [];
+  for (let i = 0; i < localStorage.length; i++) {
+    const key = localStorage.key(i);
+    if (key && key.startsWith(SAVE_PREFIX)) {
+      try {
+        saves.push(JSON.parse(localStorage.getItem(key)));
+      } catch (e) { /* skip corrupt */ }
+    }
+  }
+  saves.sort((a, b) => (b.savedAt || 0) - (a.savedAt || 0));
+  return saves;
+}
+
+function saveProgress(name) {
+  const dist = Math.max(gameState.distance, gameState.gameDistance);
+  const data = {
+    id: 'save_' + Date.now(),
+    name: name || ('Entrenamiento ' + new Date().toLocaleDateString('es-ES')),
+    strokes: gameState.strokes,
+    distance: Math.round(dist),
+    gameDistance: gameState.gameDistance,
+    calories: gameState.calories,
+    avgCadence: gameState.avgCadence || 0,
+    avgHeartRate: gameState.avgHeartRate || 0,
+    maxHeartRate: gameState.maxHeartRate || 0,
+    resistance: gameState.resistance || 0,
+    durationSec: gameState.exerciseTime || 0,
+    boatZ: gameState.boatZ,
+    savedAt: Date.now(),
+  };
+  localStorage.setItem(SAVE_PREFIX + data.id, JSON.stringify(data));
+  return data;
+}
+
+function loadProgress(id) {
+  const raw = localStorage.getItem(SAVE_PREFIX + id);
+  if (!raw) return false;
+  try {
+    const data = JSON.parse(raw);
+    gameState.strokes = data.strokes || 0;
+    gameState.distance = data.distance || 0;
+    gameState.gameDistance = data.gameDistance || 0;
+    gameState.calories = data.calories || 0;
+    gameState.exerciseTime = data.durationSec || 0;
+    gameState.boatZ = data.boatZ || 0;
+    gameState.boatVelocity = 0;
+    if (boat) {
+      boat.position.z = gameState.boatZ;
+      boat.position.x = riverCurveX(gameState.boatZ);
+      boat.rotation.y = riverHeading(gameState.boatZ);
+    }
+    $sStrokes.textContent = gameState.strokes;
+    $sDist.textContent = gameState.distance + ' m';
+    $sCal.textContent = gameState.calories + ' kcal';
+    $sSpeed.textContent = '0.0';
+    $sTime.textContent = formatDuration(gameState.exerciseTime);
+    return true;
+  } catch (e) {
+    return false;
+  }
+}
+
+function deleteProgress(id) {
+  localStorage.removeItem(SAVE_PREFIX + id);
+}
+
+function hasSavedProgress() {
+  for (let i = 0; i < localStorage.length; i++) {
+    if (localStorage.key(i).startsWith(SAVE_PREFIX)) return true;
+  }
+  return false;
+}
+
+// --- Exportación a fichero TCX compatible con Strava ---
+function estimateDuration(data) {
+  if (data.durationSec && data.durationSec > 10) return data.durationSec;
+  if (data.strokes > 0 && data.avgCadence > 0) {
+    return Math.round(data.strokes / data.avgCadence * 60);
+  }
+  if (data.distance > 0) {
+    // Estimar a 15 km/h promedio (ritmo de remo moderado)
+    return Math.round(data.distance / (15 / 3.6));
+  }
+  return 600;
+}
+
+function formatTCXDate(ts) {
+  return new Date(ts).toISOString().replace(/\.\d+Z$/, 'Z');
+}
+
+function formatDuration(sec) {
+  const h = Math.floor(sec / 3600);
+  const m = Math.floor((sec % 3600) / 60);
+  const s = Math.floor(sec % 60);
+  return `${h.toString().padStart(2,'0')}:${m.toString().padStart(2,'0')}:${s.toString().padStart(2,'0')}`;
+}
+
+function exportToTCX(data) {
+  const duration = estimateDuration(data);
+  const distance = data.distance || 0;
+  const calories = data.calories || 0;
+  const avgHR = data.avgHeartRate || 0;
+  const maxHR = data.maxHeartRate || avgHR || 0;
+  const startTime = data.savedAt || Date.now();
+  const startStr = formatTCXDate(startTime);
+
+  // TCX sin trackpoints (sin GPS). Strava lo acepta como ejercicio manual.
+  // Usamos Activity > Lap con datos agregados.
+  let tcx = `<?xml version="1.0" encoding="UTF-8"?>\n`;
+  tcx += `<TrainingCenterDatabase xmlns="http://www.garmin.com/xmlschemas/TrainingCenterDatabase/v2">\n`;
+  tcx += `  <Activities>\n`;
+  tcx += `    <Activity Sport="Rowing">\n`;
+  tcx += `      <Id>${startStr}</Id>\n`;
+  tcx += `      <Lap StartTime="${startStr}">\n`;
+  tcx += `        <TotalTimeSeconds>${duration}</TotalTimeSeconds>\n`;
+  tcx += `        <DistanceMeters>${distance}</DistanceMeters>\n`;
+  tcx += `        <MaximumSpeed>0</MaximumSpeed>\n`;
+  tcx += `        <Calories>${calories}</Calories>\n`;
+  if (avgHR > 0) {
+    tcx += `        <AverageHeartRateBpm><Value>${Math.round(avgHR)}</Value></AverageHeartRateBpm>\n`;
+  }
+  if (maxHR > 0) {
+    tcx += `        <MaximumHeartRateBpm><Value>${Math.round(maxHR)}</Value></MaximumHeartRateBpm>\n`;
+  }
+  tcx += `        <Intensity>Active</Intensity>\n`;
+  tcx += `        <TriggerMethod>Manual</TriggerMethod>\n`;
+
+  // Generar trackpoints sintéticos para que Strava acepte el fichero
+  // (Strava requiere al menos algunos trackpoints para procesar la actividad)
+  const numPoints = Math.min(Math.max(Math.floor(duration / 10), 10), 500);
+  const stepDuration = duration / numPoints;
+  const stepDistance = distance / numPoints;
+  for (let i = 0; i <= numPoints; i++) {
+    const t = i * stepDuration;
+    const d = i * stepDistance;
+    const tcxTime = formatTCXDate(startTime + t * 1000);
+    tcx += `        <Track>\n`;
+    tcx += `          <Trackpoint>\n`;
+    tcx += `            <Time>${tcxTime}</Time>\n`;
+    tcx += `            <DistanceMeters>${d.toFixed(1)}</DistanceMeters>\n`;
+    if (avgHR > 0) {
+      const hr = Math.round(avgHR + (maxHR - avgHR) * Math.sin(i / numPoints * Math.PI));
+      tcx += `            <HeartRateBpm><Value>${hr}</Value></HeartRateBpm>\n`;
+    }
+    tcx += `          </Trackpoint>\n`;
+    tcx += `        </Track>\n`;
+  }
+
+  tcx += `      </Lap>\n`;
+  tcx += `      <Notes>${data.name || 'Rowing session'} — Remadas: ${data.strokes || 0}</Notes>\n`;
+  tcx += `    </Activity>\n`;
+  tcx += `  </Activities>\n`;
+  tcx += `</TrainingCenterDatabase>\n`;
+
+  return tcx;
+}
+
+function downloadFile(filename, content, mimeType) {
+  const blob = new Blob([content], { type: mimeType });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  URL.revokeObjectURL(url);
+}
+
+function exportSave(data) {
+  const tcx = exportToTCX(data);
+  const dateStr = new Date(data.savedAt).toISOString().slice(0, 10);
+  const safeName = (data.name || 'rowing').replace(/[^a-zA-Z0-9_-]/g, '_');
+  downloadFile(`${safeName}_${dateStr}.tcx`, tcx, 'application/vnd.garmin.tcx+xml');
+}
+
+function updatePauseSummary() {
+  const dist = Math.max(gameState.distance, gameState.gameDistance);
+  const el = document.getElementById('pause-summary');
+  el.innerHTML = `
+    Remadas: <span>${gameState.strokes}</span><br>
+    Distancia: <span>${Math.round(dist)} m</span><br>
+    Calorías: <span>${gameState.calories} kcal</span><br>
+    Tiempo: <span>${formatDuration(gameState.exerciseTime || 0)}</span>
+  `;
+}
+
+function renderSavesList() {
+  const saves = getAllSaves();
+  const container = document.getElementById('saves-list');
+  if (saves.length === 0) {
+    container.innerHTML = '<div id="saves-empty">No hay entrenamientos guardados</div>';
+    return;
+  }
+  container.innerHTML = '';
+  for (const sv of saves) {
+    const entry = document.createElement('div');
+    entry.className = 'save-entry';
+    const date = new Date(sv.savedAt);
+    const dateStr = date.toLocaleDateString('es-ES') + ' ' + date.toLocaleTimeString('es-ES', { hour: '2-digit', minute: '2-digit' });
+    const durStr = formatDuration(estimateDuration(sv));
+    const dist = sv.distance || Math.round(sv.gameDistance || 0);
+    entry.innerHTML = `
+      <div class="save-info">
+        <div class="save-name">${escapeHtml(sv.name)}</div>
+        <div class="save-date">${dateStr}</div>
+        <div class="save-stats">${dist} m · ${sv.calories || 0} kcal · ${sv.strokes || 0} remadas · ${durStr}</div>
+      </div>
+      <div class="save-actions">
+        <button class="btn-load-save" data-id="${sv.id}">Cargar</button>
+        <button class="btn-export-save" data-id="${sv.id}">Exportar</button>
+        <button class="btn-delete-save" data-id="${sv.id}">Borrar</button>
+      </div>
+    `;
+    container.appendChild(entry);
+  }
+
+  container.querySelectorAll('.btn-load-save').forEach(btn => {
+    btn.addEventListener('click', () => {
+      if (loadProgress(btn.dataset.id)) {
+        document.getElementById('saves-list-overlay').classList.remove('visible');
+        paused = false;
+      }
+    });
+  });
+  container.querySelectorAll('.btn-export-save').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const raw = localStorage.getItem(SAVE_PREFIX + btn.dataset.id);
+      if (raw) {
+        try { exportSave(JSON.parse(raw)); } catch (e) {}
+      }
+    });
+  });
+  container.querySelectorAll('.btn-delete-save').forEach(btn => {
+    btn.addEventListener('click', () => {
+      deleteProgress(btn.dataset.id);
+      renderSavesList();
+    });
+  });
+}
+
+function escapeHtml(s) {
+  const div = document.createElement('div');
+  div.textContent = s || '';
+  return div.innerHTML;
+}
 
 // Estado del juego alimentado por BLE
 const gameState = {
@@ -104,6 +485,11 @@ const gameState = {
   cadence: 0,        // spm
   strokes: 0,
   distance: 0,       // metros (BLE)
+  gameDistance: 0,   // metros acumulados por física del juego (para carteles sin BLE)
+  resistance: 0,     // 1-15 (BLE byte 14)
+  calories: 0,       // kcal (BLE bytes 10-11)
+  heartRate: 0,      // bpm (BLE byte 18)
+  inclination: 0,    // 0-15 (BLE byte 21)
   boatZ: 0,          // posicion virtual del barco (world units)
   strokePhase: 0,    // 0..1 fase de la remada actual
   lastStrokeTime: 0,
@@ -111,7 +497,20 @@ const gameState = {
   boatVelocity: 0,   // velocidad en unidades de mundo/s
   lastBLEStrokes: 0, // para detectar nuevas remadas del BLE
   lastImpulseTime: 0,
+  // Estadísticas de entrenamiento (para exportar)
+  exerciseTime: 0,   // segundos activos remando
+  cadenceSum: 0,     // suma de cadencia para media
+  cadenceSamples: 0, // nº de muestras
+  heartRateSum: 0,
+  heartRateSamples: 0,
+  maxHeartRate: 0,
 };
+
+// Getters para medias (definidos como propiedades para que saveProgress los use)
+Object.defineProperties(gameState, {
+  avgCadence: { get() { return this.cadenceSamples > 0 ? this.cadenceSum / this.cadenceSamples : 0; } },
+  avgHeartRate: { get() { return this.heartRateSamples > 0 ? this.heartRateSum / this.heartRateSamples : 0; } },
+});
 
 // --- Modelo físico del remo ---
 // Cada remada aplica un impulso (delta de velocidad instantáneo).
@@ -129,7 +528,12 @@ const PHYS = {
 let lastBLEPacketTime = 0;
 
 function applyStrokeImpulse() {
-  gameState.boatVelocity += PHYS.STROKE_IMPULSE;
+  // El impulso escala con la resistencia: a mayor resistencia, más fuerza
+  // aplica el remero por stroke (más trabajo por remada).
+  // resistance 1-15 → factor 0.5..1.6
+  const r = gameState.resistance || 1;
+  const resistFactor = 0.4 + (r / 15) * 1.2;
+  gameState.boatVelocity += PHYS.STROKE_IMPULSE * resistFactor;
   if (gameState.boatVelocity > PHYS.MAX_VELOCITY) {
     gameState.boatVelocity = PHYS.MAX_VELOCITY;
   }
@@ -138,8 +542,11 @@ function applyStrokeImpulse() {
 
 function updateBoatPhysics(dt) {
   const v = gameState.boatVelocity;
+  // El drag también escala con la resistencia: más resistencia = más oposición
+  const r = gameState.resistance || 1;
+  const dragResist = 0.7 + (r / 15) * 0.6;
   // Rozamiento del agua: F = -(k*v² + c*v) en sentido opuesto al movimiento
-  const drag = PHYS.DRAG_QUAD * v * v + PHYS.DRAG_LIN * v;
+  const drag = (PHYS.DRAG_QUAD * v * v + PHYS.DRAG_LIN * v) * dragResist;
   gameState.boatVelocity -= drag * dt;
 
   if (gameState.boatVelocity < PHYS.MIN_VELOCITY) {
@@ -165,7 +572,29 @@ function updateBoatPhysics(dt) {
   gameState.speed = gameState.boatVelocity * PHYS.KM_H_FACTOR;
 
   // Mover barco
-  gameState.boatZ -= gameState.boatVelocity * dt;
+  const deltaZ = gameState.boatVelocity * dt;
+  gameState.boatZ -= deltaZ;
+
+  // Acumular distancia del juego (para carteles cuando no hay BLE)
+  gameState.gameDistance += deltaZ * METERS_PER_UNIT;
+
+  // Acumular estadísticas de entrenamiento
+  if (gameState.cadence > 0 || gameState.boatVelocity > 0) {
+    gameState.exerciseTime += dt;
+    if (gameState.cadence > 0) {
+      gameState.cadenceSum += gameState.cadence;
+      gameState.cadenceSamples++;
+    }
+  }
+  $sTime.textContent = formatDuration(gameState.exerciseTime);
+  if (gameState.heartRate > 0) {
+    gameState.heartRateSum += gameState.heartRate;
+    gameState.heartRateSamples++;
+    if (gameState.heartRate > gameState.maxHeartRate) {
+      gameState.maxHeartRate = gameState.heartRate;
+    }
+  }
+
   if (boat) {
     boat.position.z = gameState.boatZ;
     boat.position.x = riverCurveX(gameState.boatZ);
@@ -179,9 +608,9 @@ function updateBoatPhysics(dt) {
 function initThree() {
   scene = new THREE.Scene();
   scene.background = new THREE.Color(0x87CEEB);
-  scene.fog = new THREE.Fog(0x87CEEB, 80, 300);
+  scene.fog = new THREE.Fog(0x87CEEB, 150, 600);
 
-  camera = new THREE.PerspectiveCamera(60, window.innerWidth / window.innerHeight, 0.1, 600);
+  camera = new THREE.PerspectiveCamera(60, window.innerWidth / window.innerHeight, 0.1, 1200);
   camera.position.set(0, 6, 10);
 
   renderer = new THREE.WebGLRenderer({ antialias: true });
@@ -210,6 +639,8 @@ function initThree() {
   scene.add(sun);
 
   buildRiver();
+  buildSigns();
+  buildFishes();
   buildBoat();
   buildBots();
 
@@ -221,12 +652,11 @@ function initThree() {
 const RIVER_WIDTH = 14;
 const SEGMENT_LENGTH = 20;
 const NUM_SEGMENTS = 30;
-
 // --- Curva del río ---
 // El centro del río se desvía en X según una suma de senos (curva suave)
-const CURVE_AMPLITUDE = 7;   // desviación máxima en X (uds)
-const CURVE_FREQ = 0.004;    // frecuencia de la curva principal
-const CURVE_FREQ2 = 0.011;   // frecuencia secundaria (variación)
+const CURVE_AMPLITUDE = 14;  // desviación máxima en X (uds)
+const CURVE_FREQ = 0.008;    // frecuencia de la curva principal
+const CURVE_FREQ2 = 0.017;   // frecuencia secundaria (variación)
 
 // Devuelve la X del centro del río en la posición Z dada
 function riverCurveX(z) {
@@ -248,7 +678,7 @@ const trees = [];
 const mountains = [];
 const TREE_POOL = 60;
 const MOUNTAIN_POOL = 12;
-const SCENERY_RANGE = 200;  // distancia visible delantera
+const SCENERY_RANGE = 800;  // distancia visible delantera
 const RECYCLE_DIST = 80;     // distancia trasera para reciclar
 
 // Materiales reutilizables para árboles y montañas
@@ -263,33 +693,58 @@ const mountainMat = new THREE.MeshStandardMaterial({ color: 0x7986CB, roughness:
 // Geometrías reutilizables
 const trunkGeom = new THREE.CylinderGeometry(0.3, 0.4, 3, 6);
 const foliageGeom = new THREE.ConeGeometry(2, 5, 7);
-const mountainGeom = new THREE.ConeGeometry(40, 25, 5);
+const mountainGeom = new THREE.ConeGeometry(30, 22, 5);
 
-// --- Río: planos planos que siguen al barco (sin rotación) ---
+// --- Río con curvas: cadena de segmentos cortos que siguen riverCurveX ---
+const RIVER_SEG_COUNT = 40;
+const RIVER_SEG_LEN = 25;       // longitud de cada segmento (solapa con vecinos)
+const RIVER_SEG_SPACING = 20;   // distancia entre centros de segmentos
+const WATER_HALF_WIDTH = 7;      // ancho del agua (mitad) — coincide con RIVER_WIDTH/2
+const BANK_HALF_WIDTH = 30;      // ancho de cada orilla (mitad)
+
+// --- Carteles de distancia cada 250 m ---
+const SIGN_INTERVAL = 100;        // metros entre carteles
+const SIGNS_POOL = 8;             // nº de carteles simultáneos
+const METERS_PER_UNIT = 1.389;    // conversión unidades de mundo → metros (1 u/s = 5 km/h)
+const signs = [];
+let signPostGeom, signPostMat, signBoardGeom;
+
+// --- Peces ---
+const FISH_POOL = 6;
+const fishes = [];
+
+const waterSegs = [];
+const bankLSegs = [];
+const bankRSegs = [];
+
 function buildRiver() {
-  // Agua — plano ancho que sigue la posición del barco
-  const waterGeom = new THREE.PlaneGeometry(40, 400);
   const waterMat = new THREE.MeshStandardMaterial({ color: 0x2E86C1, roughness: 0.3, metalness: 0.6, side: THREE.DoubleSide });
-  river = new THREE.Mesh(waterGeom, waterMat);
-  river.rotation.x = -Math.PI / 2;
-  river.receiveShadow = true;
-  scene.add(river);
+  const bankMat = new THREE.MeshStandardMaterial({ color: 0x2E7D32, roughness: 0.9, side: THREE.DoubleSide });
+  const waterGeom = new THREE.PlaneGeometry(WATER_HALF_WIDTH * 2, RIVER_SEG_LEN);
+  const bankGeom = new THREE.BoxGeometry(BANK_HALF_WIDTH * 2, 3, RIVER_SEG_LEN);
 
-  // Orillas — cajas anchas a cada lado
-  const bankGeom = new THREE.BoxGeometry(80, 3, 400);
-  const bankMat = new THREE.MeshStandardMaterial({ color: 0x2E7D32, roughness: 0.9 });
+  for (let i = 0; i < RIVER_SEG_COUNT; i++) {
+    // Agua
+    const w = new THREE.Mesh(waterGeom, waterMat);
+    w.rotation.x = -Math.PI / 2;
+    w.receiveShadow = true;
+    scene.add(w);
+    waterSegs.push(w);
 
-  bankL = new THREE.Mesh(bankGeom, bankMat);
-  bankL.position.set(-RIVER_WIDTH/2 - 40, -1, 0);
-  bankL.receiveShadow = true;
-  bankL.castShadow = true;
-  scene.add(bankL);
+    // Orilla izquierda
+    const bl = new THREE.Mesh(bankGeom, bankMat);
+    bl.receiveShadow = true;
+    bl.castShadow = true;
+    scene.add(bl);
+    bankLSegs.push(bl);
 
-  bankR = new THREE.Mesh(bankGeom, bankMat);
-  bankR.position.set(RIVER_WIDTH/2 + 40, -1, 0);
-  bankR.receiveShadow = true;
-  bankR.castShadow = true;
-  scene.add(bankR);
+    // Orilla derecha
+    const br = new THREE.Mesh(bankGeom, bankMat);
+    br.receiveShadow = true;
+    br.castShadow = true;
+    scene.add(br);
+    bankRSegs.push(br);
+  }
 
   // --- Pool de árboles ---
   for (let i = 0; i < TREE_POOL; i++) {
@@ -321,7 +776,7 @@ function buildRiver() {
 function placeTree(tree, z) {
   const side = Math.random() < 0.5 ? -1 : 1;
   const cx = riverCurveX(z);
-  tree.position.x = cx + side * (RIVER_WIDTH/2 + 6 + Math.random() * 30);
+  tree.position.x = cx + side * (WATER_HALF_WIDTH + 4 + Math.random() * 25);
   tree.position.z = z;
   tree.position.y = 0;
   tree.scale.setScalar(0.7 + Math.random() * 0.6);
@@ -331,19 +786,42 @@ function placeTree(tree, z) {
 function placeMountain(m, z) {
   const side = Math.random() < 0.5 ? -1 : 1;
   const cx = riverCurveX(z);
-  m.position.set(cx + side * (60 + Math.random() * 40), 8, z);
-  m.scale.set(1 + Math.random(), 0.8 + Math.random() * 0.5, 1);
+  // Radio base de la montaña escalada + margen del río
+  const scale = 1 + Math.random();
+  const mountainRadius = 30 * scale;
+  const minDistance = WATER_HALF_WIDTH + BANK_HALF_WIDTH + mountainRadius * 0.5;
+  const extra = Math.random() * 30;
+  m.position.set(cx + side * (minDistance + extra), 6, z);
+  m.scale.set(scale, 0.8 + Math.random() * 0.5, scale);
 }
 
 function updateScenery() {
   if (!boat) return;
   const bz = boat.position.z;
-  const cx = riverCurveX(bz);
 
-  // Mover agua y orillas a la posición del barco (sin rotación → sin huecos)
-  if (river) { river.position.x = cx; river.position.z = bz; }
-  if (bankL) { bankL.position.x = cx - RIVER_WIDTH/2 - 40; bankL.position.z = bz; }
-  if (bankR) { bankR.position.x = cx + RIVER_WIDTH/2 + 40; bankR.position.z = bz; }
+  // Posicionar cada segmento de agua y orilla a lo largo de la curva
+  for (let i = 0; i < RIVER_SEG_COUNT; i++) {
+    const segZ = bz + (i - RIVER_SEG_COUNT / 2) * RIVER_SEG_SPACING;
+    const cx = riverCurveX(segZ);
+    const heading = riverHeading(segZ);
+
+    // Agua: centrada en el río, rotada según heading
+    const w = waterSegs[i];
+    w.position.set(cx, 0, segZ);
+    w.rotation.z = heading;
+
+    // Orilla izquierda: desplazada a la izquierda del río
+    const offset = -WATER_HALF_WIDTH - BANK_HALF_WIDTH;
+    const bl = bankLSegs[i];
+    bl.position.set(cx + Math.cos(heading) * offset, -1, segZ - Math.sin(heading) * offset);
+    bl.rotation.y = heading;
+
+    // Orilla derecha: desplazada a la derecha del río
+    const offsetR = WATER_HALF_WIDTH + BANK_HALF_WIDTH;
+    const br = bankRSegs[i];
+    br.position.set(cx + Math.cos(heading) * offsetR, -1, segZ - Math.sin(heading) * offsetR);
+    br.rotation.y = heading;
+  }
 
   // Reciclar árboles que quedan detrás de la barca
   for (const tree of trees) {
@@ -356,6 +834,152 @@ function updateScenery() {
   for (const m of mountains) {
     if (m.position.z > bz + RECYCLE_DIST) {
       placeMountain(m, bz - SCENERY_RANGE - Math.random() * 100);
+    }
+  }
+
+  updateSigns();
+}
+
+// --- Carteles de distancia ---
+function makeSignTexture(meters) {
+  const c = document.createElement('canvas');
+  c.width = 256; c.height = 128;
+  const ctx = c.getContext('2d');
+  ctx.fillStyle = '#ffffff';
+  ctx.fillRect(0, 0, 256, 128);
+  ctx.fillStyle = '#000000';
+  ctx.font = 'bold 52px sans-serif';
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.fillText(meters + ' m', 128, 64);
+  const tex = new THREE.CanvasTexture(c);
+  return tex;
+}
+
+function buildSigns() {
+  signBoardGeom = new THREE.BoxGeometry(2.2, 1.1, 0.1);
+
+  for (let i = 0; i < SIGNS_POOL; i++) {
+    const group = new THREE.Group();
+
+    const board = new THREE.Mesh(signBoardGeom, new THREE.MeshStandardMaterial({ map: makeSignTexture(0) }));
+    board.position.y = 1.0;
+    board.castShadow = true;
+    group.add(board);
+
+    group.userData = { board, distance: 0, visible: false };
+    group.visible = false;
+    scene.add(group);
+    signs.push(group);
+  }
+}
+
+function updateSigns() {
+  if (!boat) return;
+  // Usar la mayor de: distancia BLE o distancia del juego
+  const dist = Math.max(gameState.distance, gameState.gameDistance);
+  const bz = gameState.boatZ;
+
+  // Calcular qué múltiplos de 250m debemos mostrar
+  // Mostramos carteles desde el último pasado hasta SIGNS_POOL por delante
+  const lastPassed = Math.floor(dist / SIGN_INTERVAL) * SIGN_INTERVAL;
+
+  for (let i = 0; i < SIGNS_POOL; i++) {
+    const signDistance = lastPassed + (i + 1) * SIGN_INTERVAL;
+    // Posición Z: si la distancia BLE y boatZ estuvieran perfectamente sincronizados,
+    // el cartel estaría a (signDistance - dist) metros por delante del barco
+    const metersAhead = signDistance - dist;
+    const unitsAhead = metersAhead / METERS_PER_UNIT;
+    const signZ = bz - unitsAhead;
+
+    // Solo mostrar si está dentro del rango visible
+    if (metersAhead < -SIGN_INTERVAL || metersAhead > SIGNS_POOL * SIGN_INTERVAL) {
+      signs[i].visible = false;
+      continue;
+    }
+
+    const sign = signs[i];
+    sign.visible = true;
+
+    // Actualizar textura si cambió la distancia
+    if (sign.userData.distance !== signDistance) {
+      sign.userData.distance = signDistance;
+      const mat = sign.userData.board.material;
+      if (mat.map) mat.map.dispose();
+      mat.map = makeSignTexture(signDistance);
+      mat.needsUpdate = true;
+    }
+
+    // Posicionar en la orilla derecha, siguiendo la curva del río
+    const cx = riverCurveX(signZ);
+    const heading = riverHeading(signZ);
+    const sideOffset = WATER_HALF_WIDTH + 3;
+    sign.position.x = cx + Math.cos(heading) * sideOffset;
+    sign.position.z = signZ - Math.sin(heading) * sideOffset;
+    sign.position.y = 0;
+    sign.rotation.y = heading;
+  }
+}
+
+// --- Peces que saltan a la superficie ---
+function buildFishes() {
+  const fishMat = new THREE.MeshStandardMaterial({ color: 0xC0C0C0, roughness: 0.3, metalness: 0.7, flatShading: true });
+  const fishMat2 = new THREE.MeshStandardMaterial({ color: 0x607D8B, roughness: 0.3, metalness: 0.6, flatShading: true });
+  for (let i = 0; i < FISH_POOL; i++) {
+    const fish = new THREE.Group();
+    const mat = i % 2 === 0 ? fishMat : fishMat2;
+    const bodyGeom = new THREE.ConeGeometry(0.08, 0.4, 6);
+    bodyGeom.rotateZ(Math.PI / 2);
+    const body = new THREE.Mesh(bodyGeom, mat);
+    fish.add(body);
+    const tailGeom = new THREE.ConeGeometry(0.06, 0.12, 4);
+    tailGeom.rotateY(Math.PI / 2);
+    tailGeom.rotateZ(-Math.PI / 2);
+    const tail = new THREE.Mesh(tailGeom, mat);
+    tail.position.x = -0.26;
+    fish.add(tail);
+    fish.userData = { active: false, timer: 0, nextJump: 2 + Math.random() * 8 };
+    fish.visible = false;
+    scene.add(fish);
+    fishes.push(fish);
+  }
+}
+
+function updateFish(dt) {
+  if (!boat) return;
+  const bz = gameState.boatZ;
+  for (const fish of fishes) {
+    if (!fish.userData.active) {
+      fish.userData.nextJump -= dt;
+      if (fish.userData.nextJump <= 0) {
+        const offsetZ = -5 - Math.random() * 30;
+        const offsetX = (Math.random() - 0.5) * (WATER_HALF_WIDTH * 1.5);
+        const z = bz + offsetZ;
+        const cx = riverCurveX(z);
+        const heading = riverHeading(z);
+        fish.position.set(
+          cx + Math.cos(heading) * offsetX,
+          0,
+          z - Math.sin(heading) * offsetX
+        );
+        fish.rotation.y = heading + Math.PI / 2;
+        fish.userData.active = true;
+        fish.userData.timer = 0;
+        fish.userData.duration = 0.8 + Math.random() * 0.6;
+        fish.visible = true;
+      }
+    } else {
+      fish.userData.timer += dt;
+      const p = fish.userData.timer / fish.userData.duration;
+      if (p >= 1) {
+        fish.userData.active = false;
+        fish.visible = false;
+        fish.userData.nextJump = 3 + Math.random() * 10;
+      } else {
+        const arc = Math.sin(p * Math.PI);
+        fish.position.y = arc * 0.8;
+        fish.rotation.z = arc * 0.6 * (fish.position.x < boat.position.x ? 1 : -1);
+      }
     }
   }
 }
@@ -513,6 +1137,41 @@ function buildBoat() {
   deck.receiveShadow = true;
   boat.add(deck);
 
+  // --- Suelo interior de la cala (sigue la forma del casco, tapa el agua) ---
+  {
+    const cN = 14;
+    const cLen = 6.5;
+    const cMaxBeam = 1.25;
+    const cZ0 = -1.6, cZ1 = 1.3;
+    const floorY = 0.05;
+    function cHalfBeam(t) {
+      if (t < 0.02) return 0.008;
+      const bowFine = Math.pow(t, 0.65);
+      return cMaxBeam * 0.5 * Math.sin(Math.PI * bowFine) * 0.95 + cMaxBeam * 0.02;
+    }
+    const fVerts = [];
+    const fIdx = [];
+    for (let i = 0; i <= cN; i++) {
+      const t = i / cN;
+      const z = cZ0 + t * (cZ1 - cZ0);
+      const tt = (z + cLen / 2) / cLen;
+      const hb = cHalfBeam(tt) * 0.82;
+      fVerts.push(-hb, floorY, z, hb, floorY, z);
+    }
+    for (let i = 0; i < cN; i++) {
+      const a = i * 2, b = a + 1, c = a + 2, dd = a + 3;
+      fIdx.push(a, c, b, b, c, dd);
+    }
+    const cockpitFloorGeom = new THREE.BufferGeometry();
+    cockpitFloorGeom.setAttribute('position', new THREE.Float32BufferAttribute(fVerts, 3));
+    cockpitFloorGeom.setIndex(fIdx);
+    cockpitFloorGeom.computeVertexNormals();
+    const cockpitFloorMat = new THREE.MeshStandardMaterial({ color: 0x5D4037, roughness: 0.85, metalness: 0.05, side: THREE.DoubleSide });
+    const cockpitFloor = new THREE.Mesh(cockpitFloorGeom, cockpitFloorMat);
+    cockpitFloor.receiveShadow = true;
+    boat.add(cockpitFloor);
+  }
+
   // --- Listón decorativo a lo largo de la borda (rub rail / cintón) ---
   const railPoints = [];
   const N = 28;
@@ -566,7 +1225,7 @@ function buildBoat() {
   const footGeom = new THREE.BoxGeometry(0.6, 0.35, 0.04);
   const footMat = new THREE.MeshStandardMaterial({ color: 0x37474F, roughness: 0.7 });
   const footboard = new THREE.Mesh(footGeom, footMat);
-  footboard.position.set(0, 0.2, -0.75);
+  footboard.position.set(0, 0.2, -1.05);
   footboard.rotation.x = -0.25;
   footboard.castShadow = true;
   boat.add(footboard);
@@ -576,13 +1235,13 @@ function buildBoat() {
   for (const side of [-1, 1]) {
     const lockBaseGeom = new THREE.BoxGeometry(0.08, 0.04, 0.06);
     const lockBase = new THREE.Mesh(lockBaseGeom, lockMat);
-    lockBase.position.set(side * 0.9, 0.2, -0.15);
+    lockBase.position.set(side * 0.5, 0.2, -0.35);
     lockBase.castShadow = true;
     boat.add(lockBase);
 
     const pinGeom = new THREE.CylinderGeometry(0.015, 0.015, 0.1, 8);
     const pin = new THREE.Mesh(pinGeom, lockMat);
-    pin.position.set(side * 0.9, 0.26, -0.15);
+    pin.position.set(side * 0.5, 0.26, -0.35);
     boat.add(pin);
   }
 
@@ -594,12 +1253,12 @@ function buildBoat() {
 
   // --- Remos ---
   oarLeft = buildOar(-1);
-  oarLeft.position.set(-0.9, 0.26, -0.15);
+  oarLeft.position.set(-0.5, 0.26, -0.35);
   oarLeft.userData.side = -1;
   boat.add(oarLeft);
 
   oarRight = buildOar(1);
-  oarRight.position.set(0.9, 0.26, -0.15);
+  oarRight.position.set(0.5, 0.26, -0.35);
   oarRight.userData.side = 1;
   boat.add(oarRight);
 
@@ -620,7 +1279,7 @@ function buildOar(side) {
   const s = side || 1; // dirección X
 
   // Fuste (shaft) — cilindro largo, desde el oarlock hacia fuera
-  const shaftLen = 3.0;
+  const shaftLen = 2.25;
   const shaftGeom = new THREE.CylinderGeometry(0.035, 0.045, shaftLen, 12);
   shaftGeom.rotateZ(Math.PI / 2);
   const shaft = new THREE.Mesh(shaftGeom, shaftMat);
@@ -629,7 +1288,7 @@ function buildOar(side) {
   oar.add(shaft);
 
   // Fuste interior (desde el oarlock hacia el centro, donde van las manos)
-  const innerShaftLen = 0.9;
+  const innerShaftLen = 0.5;
   const innerShaftGeom = new THREE.CylinderGeometry(0.04, 0.04, innerShaftLen, 12);
   innerShaftGeom.rotateZ(Math.PI / 2);
   const innerShaft = new THREE.Mesh(innerShaftGeom, shaftMat);
@@ -638,7 +1297,7 @@ function buildOar(side) {
   oar.add(innerShaft);
 
   // Mango (donde agarran las manos) — en el extremo interior, con grip
-  const handleGeom = new THREE.CylinderGeometry(0.055, 0.05, 0.5, 12);
+  const handleGeom = new THREE.CylinderGeometry(0.055, 0.05, 0.25, 12);
   handleGeom.rotateZ(Math.PI / 2);
   const handle = new THREE.Mesh(handleGeom, handleMat);
   handle.position.x = -s * (innerShaftLen + 0.2);
@@ -665,7 +1324,7 @@ function buildOar(side) {
   }
   bladeGeom.computeVertexNormals();
   const blade = new THREE.Mesh(bladeGeom, bladeMat);
-  blade.position.x = s * (shaftLen + 0.35);
+  blade.position.x = s * (shaftLen + 0.2625);
   blade.castShadow = true;
   oar.add(blade);
 
@@ -819,14 +1478,75 @@ function buildRowerBody() {
 }
 
 // --- Animación de remada: cuerpo, brazos, piernas y remos sincronizados ---
+function syncArmsToOars() {
+  if (!oarLeft || !oarRight || !rower || !boat) return;
+  const L1 = 0.38; // bíceps (hombro → codo)
+  const L2 = 0.36; // antebrazo (codo → mano)
+
+  [['L', oarLeft, -1], ['R', oarRight, 1]].forEach(([sideKey, oar, side]) => {
+    const shoulder = rower.userData['shoulder' + sideKey];
+    const elbow = rower.userData['elbow' + sideKey];
+    if (!shoulder || !elbow) return;
+
+    // Posición del mango del remo en mundo (extremo interior)
+    oar.updateMatrixWorld();
+    const handleWorld = new THREE.Vector3(-side * 0.625, 0, 0);
+    oar.localToWorld(handleWorld);
+
+    // Posición del hombro en mundo
+    const shoulderWorld = new THREE.Vector3();
+    shoulder.getWorldPosition(shoulderWorld);
+
+    // Transformar al espacio local del spine (parent del hombro)
+    const spine = shoulder.parent;
+    spine.updateMatrixWorld();
+    const invSpine = new THREE.Matrix4().copy(spine.matrixWorld).invert();
+    const handleLocal = handleWorld.clone().applyMatrix4(invSpine);
+    const shoulderLocal = shoulderWorld.clone().applyMatrix4(invSpine);
+
+    // Vector relativo (hombro → mango) proyectado en plano YZ
+    const dy = handleLocal.y - shoulderLocal.y;
+    const dz = handleLocal.z - shoulderLocal.z;
+
+    // Distancia clampeada al rango del brazo
+    let dist = Math.sqrt(dy * dy + dz * dz);
+    dist = Math.max(Math.abs(L1 - L2) + 0.01, Math.min(L1 + L2 - 0.01, dist));
+
+    // IK 2-huesos: ley de cosenos
+    const cosElbow = (dist * dist - L1 * L1 - L2 * L2) / (2 * L1 * L2);
+    const elbowAngle = Math.acos(Math.max(-1, Math.min(1, cosElbow)));
+
+    const cosShoulder = (L1 * L1 + dist * dist - L2 * L2) / (2 * L1 * dist);
+    const shoulderInternal = Math.acos(Math.max(-1, Math.min(1, cosShoulder)));
+
+    // Ángulo del objetivo desde -Y hacia -Z (adelante)
+    const targetAngle = Math.atan2(-dz, -dy);
+
+    // Codo flexiona hacia adelante (antebrazo hacia -Z respecto al bíceps)
+    shoulder.rotation.x = targetAngle - shoulderInternal;
+    elbow.rotation.x = elbowAngle;
+  });
+}
+
 function updateRowerAnimation(dt) {
   const cadence = gameState.cadence;
   if (cadence > 0) {
     const cycleTime = 60 / cadence;
     gameState.strokePhase += dt / cycleTime;
-    gameState.strokePhase = gameState.strokePhase % 1;
-  } else {
+    if (gameState.strokePhase >= 1) {
+      gameState.strokePhase -= 1;
+      // Si era remada manual, no reiniciar ciclo automáticamente
+      if (gameState._manualStroke && gameState._manualStroke > 0) {
+        gameState._manualStroke = 0;
+        gameState.cadence = 0;
+        gameState.strokePhase = 0;
+        $sCadence.textContent = '0 spm';
+      }
+    }
+  } else if (gameState.strokePhase > 0.001) {
     gameState.strokePhase = gameState.strokePhase * 0.92;
+  } else {
+    gameState.strokePhase = 0;
   }
 
   const phase = gameState.strokePhase;
@@ -860,20 +1580,7 @@ function updateRowerAnimation(dt) {
     seatMesh.position.z = -0.05 + d * 0.5;
   }
 
-  // --- Brazos: extendidos en el catch (d=0), flexionados en el finish (d=1) ---
-  // Hombros: rotan para extender/flexionar
-  ['L', 'R'].forEach(sideKey => {
-    const shoulder = rower.userData['shoulder' + sideKey];
-    const elbow = rower.userData['elbow' + sideKey];
-    if (shoulder) {
-      // Catch: brazos adelante (rotación positiva X). Finish: brazos pegados al cuerpo.
-      shoulder.rotation.x = 1.1 - d * 1.5; // de 1.1 (extendido) a -0.4 (pegado)
-    }
-    if (elbow) {
-      // Codo flexiona en el finish
-      elbow.rotation.x = d * 1.4;
-    }
-  });
+  // --- Brazos: controlados por IK (syncArmsToOars) al final de la función ---
 
   // --- Piernas: flexionadas con rodillas altas en el catch (d=0), estiradas en el finish (d=1) ---
   ['L', 'R'].forEach(sideKey => {
@@ -894,24 +1601,38 @@ function updateRowerAnimation(dt) {
 
   // --- Remos: ángulos fijos sincronizados con la remada ---
   // El remo pivota en el oarlock; su rotación sigue la fase de drive
-  const inWater = phase < 0.4 ? 1 : 0;
+  // Transición suave de levantamiento de la pala (sin saltos bruscos)
+  let bladeLift;
+  if (phase < 0.35) {
+    bladeLift = 0;                                  // drive: pala en el agua
+  } else if (phase < 0.45) {
+    bladeLift = (phase - 0.35) / 0.1;               // salida del agua (0→1)
+  } else if (phase < 0.9) {
+    bladeLift = 1;                                  // recovery: pala levantada
+  } else {
+    bladeLift = 1 - (phase - 0.9) / 0.1;           // entrada al agua (1→0)
+  }
 
   if (oarLeft) {
-    oarLeft.rotation.x = -0.8 + d * 1.5;  // catch: adelante (-0.8), finish: atrás (0.7)
-    oarLeft.rotation.y = -0.15;            // ligero ángulo horizontal
-    oarLeft.rotation.z = (1 - inWater) * 0.4; // elevar pala en recovery
+    oarLeft.rotation.x = -0.8 + d * 1.5;            // catch: adelante (-0.8), finish: atrás (0.7)
+    oarLeft.rotation.y = -0.15;                      // ligero ángulo horizontal
+    oarLeft.rotation.z = bladeLift * 0.4;           // elevar pala en recovery
   }
   if (oarRight) {
     oarRight.rotation.x = -0.8 + d * 1.5;
     oarRight.rotation.y = 0.15;
-    oarRight.rotation.z = -(1 - inWater) * 0.4;
+    oarRight.rotation.z = -bladeLift * 0.4;
   }
+
+  // --- Sincronizar brazos con el mango del remo (IK) ---
+  // Los remos pivotan en el oarlock; los brazos siguen el mango
+  syncArmsToOars();
 
   // --- Balanceo de la barca ---
   if (boat) {
     boat.rotation.z = Math.sin(phase * Math.PI * 2) * 0.02;
     boat.rotation.x = Math.sin(phase * Math.PI * 2) * 0.015;
-    boat.position.y = Math.sin(phase * Math.PI * 2) * 0.04 + 0.05;
+    boat.position.y = Math.sin(phase * Math.PI * 2) * 0.04 + 0.12;
   }
 }
 
@@ -1017,20 +1738,20 @@ function buildSimpleBoat(hullColor, shirtColor) {
   const oars = [];
   for (const side of [-1, 1]) {
     const oar = new THREE.Group();
-    oar.position.set(side * 0.9, 0.26, -0.15);
+    oar.position.set(side * 0.5, 0.26, -0.35);
 
     const shaftMat = new THREE.MeshStandardMaterial({ color: 0x5D4037, roughness: 0.6 });
     const bladeMat = new THREE.MeshStandardMaterial({ color: 0xE65100, roughness: 0.4 });
 
-    const shaftGeom = new THREE.CylinderGeometry(0.035, 0.045, 3.0, 8);
+    const shaftGeom = new THREE.CylinderGeometry(0.035, 0.045, 2.25, 8);
     shaftGeom.rotateZ(Math.PI / 2);
     const shaft = new THREE.Mesh(shaftGeom, shaftMat);
-    shaft.position.x = side * 1.5;
+    shaft.position.x = side * 1.125;
     shaft.castShadow = true;
     oar.add(shaft);
 
-    const blade = new THREE.Mesh(new THREE.BoxGeometry(0.7, 0.03, 0.3), bladeMat);
-    blade.position.x = side * 3.35;
+    const blade = new THREE.Mesh(new THREE.BoxGeometry(0.525, 0.03, 0.3), bladeMat);
+    blade.position.x = side * 2.5125;
     blade.castShadow = true;
     oar.add(blade);
 
@@ -1172,6 +1893,7 @@ function onResize() {
 
 function animate() {
   requestAnimationFrame(animate);
+  if (paused) { renderer.render(scene, camera); return; }
   const dt = Math.min(clock.getDelta(), 0.1);
 
   updateRowerAnimation(dt);
@@ -1179,6 +1901,7 @@ function animate() {
   updateBots(dt);
   updateCamera(dt);
   updateScenery();
+  updateFish(dt);
 
   renderer.render(scene, camera);
 }
@@ -1199,6 +1922,11 @@ const $sSpeed  = document.getElementById('s-speed');
 const $sCadence= document.getElementById('s-cadence');
 const $sStrokes= document.getElementById('s-strokes');
 const $sDist   = document.getElementById('s-distance');
+const $sTime   = document.getElementById('s-time');
+const $sResist = document.getElementById('s-resistance');
+const $sCal    = document.getElementById('s-calories');
+const $sHR     = document.getElementById('s-hr');
+const $sIncl   = document.getElementById('s-incl');
 const $sStatus = document.getElementById('s-status');
 
 let device = null, server = null, writeChar = null, notifyChar = null;
@@ -1254,7 +1982,11 @@ function parseDomyosRowerData(dv) {
   const strokes = (bytes[2] << 8) | bytes[3];
   const pace = (bytes[6] << 8) | bytes[7];
   const cadence = bytes[9];
+  const calories = (bytes[10] << 8) | bytes[11];
   const distRaw = (bytes[12] << 8) | bytes[13];
+  const resistance = bytes[14];
+  const heartRate = bytes[18];
+  const inclination = bytes[21];
 
   let speed = 0;
   if (pace > 0 && pace < 0xFFFF) {
@@ -1268,6 +2000,11 @@ function parseDomyosRowerData(dv) {
   gameState.cadence = cadence;
   gameState.strokes = strokes;
   gameState.distance = distance;
+  if (distance > gameState.gameDistance) gameState.gameDistance = distance;
+  gameState.resistance = resistance;
+  gameState.calories = calories;
+  gameState.heartRate = heartRate;
+  gameState.inclination = inclination;
   lastBLEPacketTime = clock.elapsedTime;
 
   // Detectar nueva remada vía stroke count → aplicar impulso inmediato
@@ -1280,6 +2017,10 @@ function parseDomyosRowerData(dv) {
   $sCadence.textContent = cadence + ' spm';
   $sStrokes.textContent = strokes;
   $sDist.textContent = distance + ' m';
+  $sResist.textContent = resistance || '—';
+  $sCal.textContent = calories + ' kcal';
+  $sHR.textContent = heartRate > 0 ? heartRate + ' bpm' : '—';
+  $sIncl.textContent = inclination || '—';
 
   return true;
 }
@@ -1360,24 +2101,101 @@ document.getElementById('camera-btn').addEventListener('click', () => {
 // --- Botón remada manual (para probar sin máquina) ---
 document.getElementById('stroke-btn').addEventListener('click', () => {
   gameState.strokes++;
-  // Aplicar impulso físico
   applyStrokeImpulse();
-  // Simular cadencia para la animación (se mantiene un rato)
+  // Una sola remada: iniciar fase en 0 con cadencia 28 y detener al completar el ciclo
+  gameState.strokePhase = 0;
   gameState.cadence = 28;
+  gameState._manualStroke = 1;
   $sStrokes.textContent = gameState.strokes;
   $sCadence.textContent = gameState.cadence + ' spm';
-
-  // Decaer la cadencia tras 4s sin nuevos impulsos
-  if (window._strokeTimer) clearTimeout(window._strokeTimer);
-  window._strokeTimer = setTimeout(() => {
-    gameState.cadence = 0;
-    $sCadence.textContent = '0 spm';
-  }, 4000);
 });
 
 // --- Arrancar ---
 initThree();
 setStatus('Desconectado', false);
+
+// --- Botón pausa ---
+const $pauseOverlay = document.getElementById('pause-overlay');
+const $saveNameOverlay = document.getElementById('save-name-overlay');
+const $savesListOverlay = document.getElementById('saves-list-overlay');
+const $saveNameInput = document.getElementById('save-name-input');
+
+document.getElementById('stop-btn').addEventListener('click', () => {
+  paused = true;
+  updatePauseSummary();
+  $pauseOverlay.classList.add('visible');
+});
+
+document.getElementById('btn-resume').addEventListener('click', () => {
+  paused = false;
+  $pauseOverlay.classList.remove('visible');
+});
+
+// Guardar: abre diálogo de nombre
+document.getElementById('btn-save').addEventListener('click', () => {
+  $pauseOverlay.classList.remove('visible');
+  $saveNameInput.value = '';
+  $saveNameOverlay.classList.add('visible');
+  setTimeout(() => $saveNameInput.focus(), 50);
+});
+
+document.getElementById('btn-save-confirm').addEventListener('click', () => {
+  const name = $saveNameInput.value.trim() || ('Entrenamiento ' + new Date().toLocaleDateString('es-ES'));
+  saveProgress(name);
+  $saveNameOverlay.classList.remove('visible');
+  $pauseOverlay.classList.add('visible');
+  const btn = document.getElementById('btn-save');
+  const orig = btn.textContent;
+  btn.textContent = '✓ Guardado';
+  setTimeout(() => { btn.textContent = orig; }, 1500);
+});
+
+document.getElementById('btn-save-cancel').addEventListener('click', () => {
+  $saveNameOverlay.classList.remove('visible');
+  $pauseOverlay.classList.add('visible');
+});
+
+$saveNameInput.addEventListener('keydown', (e) => {
+  if (e.key === 'Enter') document.getElementById('btn-save-confirm').click();
+  if (e.key === 'Escape') document.getElementById('btn-save-cancel').click();
+});
+
+// Lista de entrenamientos
+document.getElementById('btn-list').addEventListener('click', () => {
+  $pauseOverlay.classList.remove('visible');
+  renderSavesList();
+  $savesListOverlay.classList.add('visible');
+});
+
+document.getElementById('btn-saves-close').addEventListener('click', () => {
+  $savesListOverlay.classList.remove('visible');
+  $pauseOverlay.classList.add('visible');
+});
+
+document.getElementById('btn-reset').addEventListener('click', () => {
+  gameState.strokes = 0;
+  gameState.distance = 0;
+  gameState.gameDistance = 0;
+  gameState.calories = 0;
+  gameState.boatZ = 0;
+  gameState.boatVelocity = 0;
+  gameState.exerciseTime = 0;
+  gameState.cadenceSum = 0;
+  gameState.cadenceSamples = 0;
+  gameState.heartRateSum = 0;
+  gameState.heartRateSamples = 0;
+  gameState.maxHeartRate = 0;
+  if (boat) {
+    boat.position.set(0, 0, 0);
+    boat.rotation.y = 0;
+  }
+  $sStrokes.textContent = '0';
+  $sDist.textContent = '0 m';
+  $sCal.textContent = '0 kcal';
+  $sSpeed.textContent = '0.0';
+  paused = false;
+  $pauseOverlay.classList.remove('visible');
+});
 </script>
 </body>
 </html>
