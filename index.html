@@ -319,7 +319,7 @@ function getAllSaves() {
 }
 
 function saveProgress(name) {
-  const dist = Math.max(gameState.distance, gameState.gameDistance);
+  const dist = gameState.gameDistance;
   const data = {
     id: 'save_' + Date.now(),
     name: name || ('Entrenamiento ' + new Date().toLocaleDateString('es-ES')),
@@ -347,6 +347,9 @@ function loadProgress(id) {
     gameState.strokes = data.strokes || 0;
     gameState.distance = data.distance || 0;
     gameState.gameDistance = data.gameDistance || 0;
+    gameState.gameDistance = data.gameDistance || data.distance || 0;
+    gameState.bleDistanceTarget = data.distance || 0;
+    gameState.lastBLEDistance = data.distance || 0;
     gameState.calories = data.calories || 0;
     gameState.exerciseTime = data.durationSec || 0;
     gameState.boatZ = data.boatZ || 0;
@@ -357,7 +360,7 @@ function loadProgress(id) {
       boat.rotation.y = riverHeading(gameState.boatZ);
     }
     $sStrokes.textContent = gameState.strokes;
-    $sDist.textContent = gameState.distance + ' m';
+    $sDist.textContent = Math.round(gameState.gameDistance) + ' m';
     $sCal.textContent = gameState.calories + ' kcal';
     $sSpeed.textContent = '0.0';
     $sTime.textContent = formatDuration(gameState.exerciseTime);
@@ -482,7 +485,7 @@ function exportSave(data) {
 }
 
 function updatePauseSummary() {
-  const dist = Math.max(gameState.distance, gameState.gameDistance);
+  const dist = gameState.gameDistance;
   const el = document.getElementById('pause-summary');
   el.innerHTML = `
     Strokes: <span>${gameState.strokes}</span><br>
@@ -548,8 +551,10 @@ const gameState = {
   speed: 0,          // km/h (mostrado en HUD, derivado de boatVelocity)
   cadence: 0,        // spm
   strokes: 0,
-  distance: 0,       // metros (BLE)
-  gameDistance: 0,   // metros acumulados por física del juego (para carteles sin BLE)
+  distance: 0,       // metros (BLE, saltos de 100m)
+  gameDistance: 0,   // metros acumulados por física + corrección gradual BLE
+  bleDistanceTarget: 0, // objetivo BLE al que corregir
+  lastBLEDistance: 0,   // último valor BLE recibido
   resistance: 0,     // 1-15 (BLE byte 14)
   calories: 0,       // kcal (BLE bytes 10-11)
   heartRate: 0,      // bpm (BLE byte 18)
@@ -642,8 +647,21 @@ function updateBoatPhysics(dt) {
   const deltaZ = gameState.boatVelocity * dt;
   gameState.boatZ -= deltaZ;
 
-  // Acumular distancia del juego (para carteles cuando no hay BLE)
+  // Acumular distancia por física (avance suave cada frame)
   gameState.gameDistance += deltaZ * METERS_PER_UNIT;
+
+  // --- Corrección gradual hacia el valor BLE ---
+  // El remo reporta saltos de 100m. Cuando llega un nuevo valor BLE, se calcula
+  // el error y se corrige gameDistance poco a poco (repartido en ~3 segundos)
+  // para que no haya saltos bruscos pero sí converja al valor real.
+  if (gameState.bleDistanceTarget > 0) {
+    const error = gameState.bleDistanceTarget - gameState.gameDistance;
+    if (Math.abs(error) > 0.5) {
+      // Corregir una fracción del error por segundo (converge en ~3s)
+      const correctionRate = error / 3.0;
+      gameState.gameDistance += correctionRate * dt;
+    }
+  }
 
   // Acumular estadísticas de entrenamiento
   if (gameState.cadence > 0 || gameState.boatVelocity > 0) {
@@ -724,19 +742,22 @@ const NUM_SEGMENTS = 30;
 const CURVE_AMPLITUDE = 14;  // desviación máxima en X (uds)
 const CURVE_FREQ = 0.008;    // frecuencia de la curva principal
 const CURVE_FREQ2 = 0.017;   // frecuencia secundaria (variación)
+// Fases aleatorias para que cada partida tenga un recorrido distinto
+const CURVE_PHASE1 = Math.random() * Math.PI * 2;
+const CURVE_PHASE2 = Math.random() * Math.PI * 2;
 
 // Devuelve la X del centro del río en la posición Z dada
 function riverCurveX(z) {
-  return Math.sin(z * CURVE_FREQ) * CURVE_AMPLITUDE
-       + Math.sin(z * CURVE_FREQ2 + 1.3) * CURVE_AMPLITUDE * 0.35;
+  return Math.sin(z * CURVE_FREQ + CURVE_PHASE1) * CURVE_AMPLITUDE
+       + Math.sin(z * CURVE_FREQ2 + CURVE_PHASE2) * CURVE_AMPLITUDE * 0.35;
 }
 
 // Devuelve el ángulo de rumbo (heading) en radianes en la posición Z dada
 // Es la derivada de riverCurveX: dX/dZ
 function riverHeading(z) {
   return Math.atan(
-    Math.cos(z * CURVE_FREQ) * CURVE_AMPLITUDE * CURVE_FREQ
-    + Math.cos(z * CURVE_FREQ2 + 1.3) * CURVE_AMPLITUDE * 0.35 * CURVE_FREQ2
+    Math.cos(z * CURVE_FREQ + CURVE_PHASE1) * CURVE_AMPLITUDE * CURVE_FREQ
+    + Math.cos(z * CURVE_FREQ2 + CURVE_PHASE2) * CURVE_AMPLITUDE * 0.35 * CURVE_FREQ2
   );
 }
 
@@ -944,7 +965,7 @@ function buildSigns() {
 function updateSigns() {
   if (!boat) return;
   // Usar la mayor de: distancia BLE o distancia del juego
-  const dist = Math.max(gameState.distance, gameState.gameDistance);
+  const dist = gameState.gameDistance;
   const bz = gameState.boatZ;
 
   // Calcular qué múltiplos de 250m debemos mostrar
@@ -1986,7 +2007,7 @@ function updateGoalHUD(dt) {
       valueEl.classList.remove('finished');
     }
   } else if (gameState.goalMode === 'distance') {
-    const dist = Math.max(gameState.distance, gameState.gameDistance);
+    const dist = gameState.gameDistance;
     const remaining = Math.max(0, gameState.goalValue - dist);
     valueEl.textContent = Math.round(remaining) + ' m';
     labelEl.textContent = 'Distance left';
@@ -2110,7 +2131,11 @@ function parseDomyosRowerData(dv) {
   gameState.cadence = cadence;
   gameState.strokes = strokes;
   gameState.distance = distance;
-  if (distance > gameState.gameDistance) gameState.gameDistance = distance;
+  // Marcar el objetivo BLE para corrección gradual en updateBoatPhysics
+  if (distance > gameState.bleDistanceTarget) {
+    gameState.bleDistanceTarget = distance;
+  }
+  gameState.lastBLEDistance = distance;
   gameState.resistance = resistance;
   gameState.calories = calories;
   gameState.heartRate = heartRate;
@@ -2126,7 +2151,7 @@ function parseDomyosRowerData(dv) {
   // Actualizar HUD (la velocidad la actualiza updateBoatPhysics)
   $sCadence.textContent = cadence + ' spm';
   $sStrokes.textContent = strokes;
-  $sDist.textContent = distance + ' m';
+  $sDist.textContent = Math.round(gameState.gameDistance) + ' m';
   $sResist.textContent = resistance || '—';
   $sCal.textContent = calories + ' kcal';
   $sHR.textContent = heartRate > 0 ? heartRate + ' bpm' : '—';
@@ -2286,6 +2311,9 @@ document.getElementById('btn-reset').addEventListener('click', () => {
   gameState.strokes = 0;
   gameState.distance = 0;
   gameState.gameDistance = 0;
+  gameState.gameDistance = 0;
+  gameState.bleDistanceTarget = 0;
+  gameState.lastBLEDistance = 0;
   gameState.calories = 0;
   gameState.boatZ = 0;
   gameState.boatVelocity = 0;
@@ -2330,6 +2358,9 @@ document.querySelectorAll('.goal-btn').forEach(btn => {
     gameState.strokes = 0;
     gameState.distance = 0;
     gameState.gameDistance = 0;
+    gameState.gameDistance = 0;
+    gameState.bleDistanceTarget = 0;
+    gameState.lastBLEDistance = 0;
     gameState.calories = 0;
     gameState.boatZ = 0;
     gameState.boatVelocity = 0;
