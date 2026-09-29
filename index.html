@@ -334,7 +334,7 @@ import * as THREE from 'three';
 // ========================================================================
 
 let scene, camera, renderer, clock;
-let boat, rower, oarLeft, oarRight;
+let boat;
 const riverSegments = [];
 let cameraMode = 0; // 0: chase, 1: side, 2: cinematic
 const CAM_MODES = ['Chase', 'Side', 'Cinematic'];
@@ -782,8 +782,8 @@ function updateBoatPhysics(dt) {
 
 function initThree() {
   scene = new THREE.Scene();
-  scene.background = new THREE.Color(0x87CEEB);
-  scene.fog = new THREE.Fog(0x87CEEB, 150, 600);
+  scene.background = new THREE.Color(HORIZON);
+  scene.fog = new THREE.Fog(HORIZON, 120, 600);
 
   camera = new THREE.PerspectiveCamera(60, window.innerWidth / window.innerHeight, 0.1, 1200);
   camera.position.set(0, 6, 10);
@@ -814,9 +814,11 @@ function initThree() {
   scene.add(sun);
 
   buildRiver();
+  buildDecor();
   buildSigns();
   buildFishes();
-  buildBoat();
+  boat = buildShell(0xB71C1C, 0xFDD835, 0xE65100);
+  scene.add(boat);
   buildBots();
 
   window.addEventListener('resize', onResize);
@@ -854,7 +856,8 @@ function riverHeading(z) {
 // --- Río infinito (paisaje procedural que se recicla) ---
 const trees = [];
 const mountains = [];
-const TREE_POOL = 60;
+const TREE_POOL = 120;
+const HORIZON = 0xCDE8F5;
 const MOUNTAIN_POOL = 12;
 const SCENERY_RANGE = 800;  // distancia visible delantera
 const RECYCLE_DIST = 80;     // distancia trasera para reciclar
@@ -872,6 +875,9 @@ const mountainMat = new THREE.MeshStandardMaterial({ color: 0x7986CB, roughness:
 const trunkGeom = new THREE.CylinderGeometry(0.3, 0.4, 3, 6);
 const foliageGeom = new THREE.ConeGeometry(2, 5, 7);
 const mountainGeom = new THREE.ConeGeometry(30, 22, 5);
+const snowGeom = new THREE.ConeGeometry(10.8, 7.9, 5);
+const snowMat = new THREE.MeshStandardMaterial({ color: 0xF5F9FF, roughness: 1, flatShading: true });
+const blobGeom = new THREE.IcosahedronGeometry(2.4, 1);
 
 // --- Río con curvas: cadena de segmentos cortos que siguen riverCurveX ---
 const RIVER_SEG_COUNT = 40;
@@ -932,10 +938,20 @@ function buildRiver() {
     trunk.castShadow = true;
     tree.add(trunk);
 
-    const foliage = new THREE.Mesh(foliageGeom, foliageMats[i % 3]);
-    foliage.position.y = 5;
+    // 1 de cada 3 es un árbol de copa redonda; el resto son pinos de dos pisos
+    const round = i % 3 === 2;
+    const fm = foliageMats[(i >> 1) % 3];
+    const foliage = new THREE.Mesh(round ? blobGeom : foliageGeom, fm);
+    foliage.position.y = round ? 4.5 : 5;
     foliage.castShadow = true;
     tree.add(foliage);
+    if (!round) {
+      const top = new THREE.Mesh(foliageGeom, fm);
+      top.scale.setScalar(0.7);
+      top.position.y = 7.2;
+      top.castShadow = true;
+      tree.add(top);
+    }
 
     placeTree(tree, -i * (SCENERY_RANGE / TREE_POOL));
     scene.add(tree);
@@ -945,6 +961,7 @@ function buildRiver() {
   // --- Pool de montañas lejanas ---
   for (let i = 0; i < MOUNTAIN_POOL; i++) {
     const m = new THREE.Mesh(mountainGeom, mountainMat);
+    m.add(new THREE.Mesh(snowGeom, snowMat)); // nieve en la cima
     placeMountain(m, -i * 80);
     scene.add(m);
     mountains.push(m);
@@ -1016,6 +1033,146 @@ function updateScenery() {
   }
 
   updateSigns();
+  updateDecor(bz);
+}
+
+// --- Decorado: cielo, sol, nubes, boyas, cañas y arbustos ---
+const hash = n => { const v = Math.sin(n * 127.1) * 43758.5453; return v - Math.floor(v); };
+const BUOY_N = 40, BUOY_SP = 12, REED_N = 100, REED_SP = 6, BUSH_N = 60, BUSH_SP = 10;
+const CLOUD_N = 14;
+let sky, buoys, reeds, bushes, lastBuoyBase = null;
+const clouds = [];
+const _m = new THREE.Matrix4(), _q = new THREE.Quaternion(), _sc = new THREE.Vector3(), _pp = new THREE.Vector3();
+const _e = new THREE.Euler(), _c = new THREE.Color();
+
+function buildDecor() {
+  // Cielo: cúpula con degradado (sigue a la cámara, sin niebla)
+  const g = new THREE.SphereGeometry(900, 24, 16);
+  const top = new THREE.Color(0x2E7BC4), hor = new THREE.Color(HORIZON), cols = [];
+  const pos = g.attributes.position;
+  for (let i = 0; i < pos.count; i++) {
+    const t = Math.max(0, pos.getY(i) / 900);
+    _c.copy(hor).lerp(top, Math.pow(t, 0.55));
+    cols.push(_c.r, _c.g, _c.b);
+  }
+  g.setAttribute('color', new THREE.Float32BufferAttribute(cols, 3));
+  sky = new THREE.Mesh(g, new THREE.MeshBasicMaterial({ vertexColors: true, side: THREE.BackSide, fog: false, depthWrite: false }));
+  sky.renderOrder = -2;
+  scene.add(sky);
+
+  // Sol (en la dirección de la luz direccional) con halo
+  const dir = new THREE.Vector3(30, 50, -20).normalize().multiplyScalar(800);
+  for (const [r, col, op] of [[28, 0xFFF6D0, 1], [70, 0xFFF0B0, 0.25]]) {
+    const sun = new THREE.Mesh(new THREE.SphereGeometry(r, 16, 12),
+      new THREE.MeshBasicMaterial({ color: col, fog: false, transparent: op < 1, opacity: op, depthWrite: false }));
+    sun.position.copy(dir);
+    sun.renderOrder = -1;
+    sky.add(sun);
+  }
+
+  // Nubes: montones de esferas achatadas
+  const cloudMat = new THREE.MeshBasicMaterial({ color: 0xFFFFFF, transparent: true, opacity: 0.92, fog: false });
+  const puff = new THREE.SphereGeometry(1, 10, 8);
+  for (let i = 0; i < CLOUD_N; i++) {
+    const c = new THREE.Group();
+    const n = 4 + Math.floor(Math.random() * 3);
+    for (let j = 0; j < n; j++) {
+      const p = new THREE.Mesh(puff, cloudMat);
+      const r = 10 + Math.random() * 10;
+      p.scale.set(r * 1.4, r * 0.6, r);
+      p.position.set((j - n / 2) * 14 + Math.random() * 6, Math.random() * 4, Math.random() * 8);
+      c.add(p);
+    }
+    c.position.set((Math.random() - 0.5) * 700, 90 + Math.random() * 60, -Math.random() * 600);
+    c.userData.speed = 1 + Math.random() * 2;
+    scene.add(c);
+    clouds.push(c);
+  }
+
+  // Boyas de calle (rojas/blancas) a ambos lados del agua
+  buoys = new THREE.InstancedMesh(new THREE.SphereGeometry(0.22, 8, 6), new THREE.MeshStandardMaterial({ roughness: 0.5 }), BUOY_N * 2);
+  buoys.instanceColor = new THREE.InstancedBufferAttribute(new Float32Array(BUOY_N * 2 * 3), 3);
+  buoys.frustumCulled = false;
+  scene.add(buoys);
+
+  // Cañas en la orilla
+  const reedGeom = new THREE.ConeGeometry(0.04, 1.1, 3);
+  reedGeom.translate(0, 0.55, 0);
+  reeds = new THREE.InstancedMesh(reedGeom, new THREE.MeshStandardMaterial({ color: 0x9CB84A, flatShading: true, side: THREE.DoubleSide }), REED_N * 2);
+  reeds.frustumCulled = false;
+  scene.add(reeds);
+
+  // Arbustos
+  bushes = new THREE.InstancedMesh(new THREE.IcosahedronGeometry(1, 0), new THREE.MeshStandardMaterial({ flatShading: true }), BUSH_N * 2);
+  bushes.instanceColor = new THREE.InstancedBufferAttribute(new Float32Array(BUSH_N * 2 * 3), 3);
+  bushes.frustumCulled = false;
+  bushes.castShadow = true;
+  scene.add(bushes);
+}
+
+// Posición en la orilla: off = distancia lateral al centro del río (con signo)
+function riverPoint(z, off, out) {
+  const h = riverHeading(z);
+  return out.set(riverCurveX(z) + Math.cos(h) * off, 0, z - Math.sin(h) * off);
+}
+
+function updateDecor(bz) {
+  const t = performance.now() / 1000;
+  sky.position.copy(camera.position);
+
+  for (const c of clouds) {
+    c.position.x += c.userData.speed * 0.016;
+    if (c.position.z > bz + 150) c.position.set(boat.position.x + (Math.random() - 0.5) * 700, 90 + Math.random() * 60, bz - 500 - Math.random() * 200);
+  }
+
+  // Todo lo instanciado se ancla al mundo con índices enteros (z = índice * separación)
+  const bb = Math.round(bz / BUOY_SP);
+  const setBuoys = lastBuoyBase !== bb;
+  lastBuoyBase = bb;
+  for (let k = 0; k < BUOY_N; k++) {
+    const idx = bb + k - Math.floor(BUOY_N * 0.75);
+    for (let s = 0; s < 2; s++) {
+      const i = k * 2 + s;
+      riverPoint(idx * BUOY_SP, (s ? 1 : -1) * (WATER_HALF_WIDTH - 0.8), _pp);
+      _pp.y = 0.03 + Math.sin(t * 2 + idx + s) * 0.03;
+      _m.makeTranslation(_pp.x, _pp.y, _pp.z);
+      buoys.setMatrixAt(i, _m);
+      if (setBuoys) buoys.setColorAt(i, _c.set(idx % 2 ? 0xE53935 : 0xFFFFFF));
+    }
+  }
+  buoys.instanceMatrix.needsUpdate = true;
+  if (setBuoys) buoys.instanceColor.needsUpdate = true;
+
+  const rb = Math.round(bz / REED_SP);
+  for (let k = 0; k < REED_N; k++) {
+    const idx = rb + k - Math.floor(REED_N * 0.75);
+    for (let s = 0; s < 2; s++) {
+      const h = hash(idx * 2 + s);
+      riverPoint(idx * REED_SP + h * 3, (s ? 1 : -1) * (WATER_HALF_WIDTH + 0.2 + h * 1.2), _pp);
+      _pp.y = 0.5;
+      const sc = 0.6 + hash(idx + s * 7.7) * 0.7;
+      _q.setFromEuler(_e.set((h - 0.5) * 0.3, h * 6, 0));
+      reeds.setMatrixAt(k * 2 + s, _m.compose(_pp, _q, _sc.set(sc, sc, sc)));
+    }
+  }
+  reeds.instanceMatrix.needsUpdate = true;
+
+  const bsb = Math.round(bz / BUSH_SP);
+  for (let k = 0; k < BUSH_N; k++) {
+    const idx = bsb + k - Math.floor(BUSH_N * 0.75);
+    for (let s = 0; s < 2; s++) {
+      const h = hash(idx * 3 + s + 0.5), h2 = hash(idx * 5 + s);
+      riverPoint(idx * BUSH_SP + h2 * 5, (s ? 1 : -1) * (WATER_HALF_WIDTH + 2 + h * 12), _pp);
+      const sc = 0.5 + h2 * 0.9;
+      _pp.y = 0.5 + sc * 0.4;
+      _q.setFromEuler(_e.set(0, h * 6, 0));
+      const i = k * 2 + s;
+      bushes.setMatrixAt(i, _m.compose(_pp, _q, _sc.set(sc * 1.3, sc * 0.8, sc * 1.3)));
+      bushes.setColorAt(i, _c.setHSL(0.24 + h2 * 0.08, 0.7, 0.3 + h * 0.15));
+    }
+  }
+  bushes.instanceMatrix.needsUpdate = true;
+  bushes.instanceColor.needsUpdate = true;
 }
 
 // --- Carteles de distancia ---
@@ -1162,548 +1319,262 @@ function updateFish(dt) {
   }
 }
 
-// --- Genera la geometría del casco por lofting de secciones transversales ---
-function buildHullGeometry() {
-  const N = 28;   // estaciones a lo largo de la eslora
-  const M = 12;   // vértices por media sección (de borda a quilla)
-  const len = 6.5;
-  const maxBeam = 1.25;
-  const maxDepth = 0.5;
+// ========================================================================
+//  EMBARCACION — single scull (skiff) con remero articulado por IK
+//  Ejes locales: proa = -Z (sentido de la marcha), popa = +Z, arriba = +Y.
+//  El remero mira a popa (+Z), con los pies en la plancha de popa.
+//  Origen Y: la linea de flotacion queda en y = -0.08 (el barco se sube +0.08).
+// ========================================================================
+const HULL_LEN = 7.5, HULL_HB = 0.25, HULL_DEPTH = 0.22;
+const hullT = z => (z + HULL_LEN / 2) / HULL_LEN;
+const hullHB = t => HULL_HB * Math.pow(Math.sin(Math.PI * t), 0.6);
+const hullDepth = t => HULL_DEPTH * Math.pow(Math.sin(Math.PI * t), 0.8);
+const hullSheer = t => 0.09 + 0.08 * Math.pow(Math.abs(2 * t - 1), 3); // proa/popa levantadas
 
-  // Perfil de manga (semi-ancho) a lo largo de la eslora
-  // t=0 → proa (punta), t=1 → popa
-  function halfBeam(t) {
-    if (t < 0.02) return 0.008;
-    // Proa más fina; manga máxima hacia el 35-40%; popa más redondeada
-    const bowFine = Math.pow(t, 0.65);
-    return maxBeam * 0.5 * Math.sin(Math.PI * bowFine) * 0.95 + maxBeam * 0.02;
-  }
-  // Perfil de profundidad del casco
-  function depth(t) {
-    if (t < 0.02) return 0.01;
-    return maxDepth * Math.sin(Math.PI * Math.pow(t, 0.55) * 0.92);
-  }
-  // Altura de la borda (sheer) — ligeramente más alta en proa y popa
-  function sheer(t) {
-    return 0.12 + Math.sin(t * Math.PI) * 0.06 + Math.pow(1 - t, 2) * 0.08;
-  }
+// Cotas del aparejo (z positivo = popa)
+const COCKPIT_Z0 = -0.9, COCKPIT_Z1 = 1.1;
+const SEAT_C = 0.45, SLIDE = 0.5;   // asiento: z en el catch y recorrido
+const HIP_Y = 0.17;                 // altura de la cadera sobre el asiento
+const PIN_X = 0.8, PIN_Z = 0.5;     // oarlocks (en los riggers)
+const PIN_Y = { '-1': 0.24, '1': 0.2 }; // un remo mas alto que otro para que no choquen las manos
+const OAR_IN = 0.9, OAR_OUT = 2.0, GRIP = 0.78;
+const ARM = [0.33, 0.31], LEG = [0.44, 0.44]; // hueso superior/inferior
 
-  const verts = [];
-  // Cada estación genera (M+1) vértices: de borda de estribor → quilla → borda de babor
+let _shellGeo = null;
+function shellGeometries() {
+  if (_shellGeo) return _shellGeo;
+  const N = 40, M = 10, v = [], idx = [];
   for (let i = 0; i <= N; i++) {
-    const t = i / N;
-    const z = -len / 2 + t * len;
-    const hb = halfBeam(t);
-    const d = depth(t);
-    const sh = sheer(t);
-
+    const t = i / N, z = -HULL_LEN / 2 + t * HULL_LEN;
+    const hb = hullHB(t), d = hullDepth(t), sh = hullSheer(t);
     for (let j = 0; j <= M; j++) {
-      const angle = (j / M) * Math.PI; // 0 = estribor, π/2 = fondo, π = babor
-      const x = hb * Math.cos(angle);
-      const y = sh - d * Math.sin(angle);
-      verts.push(x, y, z);
+      const a = (j / M) * Math.PI; // 0 = estribor, PI = babor
+      v.push(hb * Math.cos(a), sh - d * Math.sin(a), z);
     }
   }
-
-  const idx = [];
-  for (let i = 0; i < N; i++) {
-    for (let j = 0; j < M; j++) {
-      const a = i * (M + 1) + j;
-      const b = a + 1;
-      const c = (i + 1) * (M + 1) + j;
-      const dd = c + 1;
-      idx.push(a, c, b);
-      idx.push(b, c, dd);
-    }
+  for (let i = 0; i < N; i++) for (let j = 0; j < M; j++) {
+    const a = i * (M + 1) + j, c = a + M + 1;
+    idx.push(a, c, a + 1, a + 1, c, c + 1);
   }
+  const hull = new THREE.BufferGeometry();
+  hull.setAttribute('position', new THREE.Float32BufferAttribute(v, 3));
+  hull.setIndex(idx);
+  hull.computeVertexNormals();
 
-  const geom = new THREE.BufferGeometry();
-  geom.setAttribute('position', new THREE.Float32BufferAttribute(verts, 3));
-  geom.setIndex(idx);
-  geom.computeVertexNormals();
-  return geom;
+  // Cubierta: tira plana a la altura de la borda entre dos z
+  const deck = (z0, z1) => {
+    const n = 14, dv = [], di = [];
+    for (let i = 0; i <= n; i++) {
+      const z = z0 + (z1 - z0) * i / n, t = hullT(z), hb = hullHB(t), y = hullSheer(t) + 0.004;
+      dv.push(-hb, y, z, hb, y, z);
+    }
+    for (let i = 0; i < n; i++) di.push(2 * i, 2 * i + 1, 2 * i + 2, 2 * i + 1, 2 * i + 3, 2 * i + 2);
+    const g = new THREE.BufferGeometry();
+    g.setAttribute('position', new THREE.Float32BufferAttribute(dv, 3));
+    g.setIndex(di);
+    g.computeVertexNormals();
+    return g;
+  };
+  _shellGeo = { hull, foreDeck: deck(-HULL_LEN / 2, COCKPIT_Z0), aftDeck: deck(COCKPIT_Z1, HULL_LEN / 2) };
+  return _shellGeo;
 }
 
-// --- Geometría de la cubierta (deck) con cala abierta ---
-function buildDeckGeometry() {
-  const N = 28;
-  const len = 6.5;
-  const maxBeam = 1.25;
-  const cockpitZ0 = -0.9; // inicio de la cala (hacia proa)
-  const cockpitZ1 = 1.3;  // fin de la cala (hacia popa)
-
-  function halfBeam(t) {
-    if (t < 0.02) return 0.008;
-    const bowFine = Math.pow(t, 0.65);
-    return maxBeam * 0.5 * Math.sin(Math.PI * bowFine) * 0.95 + maxBeam * 0.02;
-  }
-  function sheer(t) {
-    return 0.12 + Math.sin(t * Math.PI) * 0.06 + Math.pow(1 - t, 2) * 0.08;
-  }
-
-  const verts = [];
-  const idx = [];
-
-  // Generar dos tiras de cubierta: proa (t < cockpitZ0) y popa (t > cockpitZ1)
-  // Cada sección es un triángulo que cierra de borda a borda
-  let vBase = 0;
-  for (let i = 0; i <= N; i++) {
-    const t = i / N;
-    const z = -len / 2 + t * len;
-    if (z > cockpitZ0 && z < cockpitZ1) continue; // saltar la cala
-
-    const hb = halfBeam(t);
-    const sh = sheer(t);
-    // Un solo vértice en el centro (simplificación: triángulo por sección)
-    verts.push(0, sh, z);          // centro
-    verts.push(hb, sh, z);         // estribor
-    verts.push(-hb, sh, z);        // babor
-  }
-
-  // Crear triángulos para cerrar la cubierta entre estaciones consecutivas
-  // Encontrar los índices de estaciones válidas
-  const validStations = [];
-  for (let i = 0; i <= N; i++) {
-    const t = i / N;
-    const z = -len / 2 + t * len;
-    if (!(z > cockpitZ0 && z < cockpitZ1)) validStations.push(i);
-  }
-
-  for (let k = 0; k < validStations.length - 1; k++) {
-    const i0 = validStations[k];
-    const i1 = validStations[k + 1];
-    // Solo conectar si son adyacentes o del mismo segmento
-    if (i1 !== i0 + 1) continue; // saltar el salto de la cala
-
-    const a = k * 3;       // centro0
-    const b = k * 3 + 1;   // estribor0
-    const c = k * 3 + 2;   // babor0
-    const d = (k + 1) * 3;     // centro1
-    const e = (k + 1) * 3 + 1; // estribor1
-    const f = (k + 1) * 3 + 2; // babor1
-
-    idx.push(a, b, d);
-    idx.push(d, b, e);
-    idx.push(a, d, c);
-    idx.push(c, d, f);
-  }
-
-  const geom = new THREE.BufferGeometry();
-  geom.setAttribute('position', new THREE.Float32BufferAttribute(verts, 3));
-  geom.setIndex(idx);
-  geom.computeVertexNormals();
-  return geom;
+// --- Helpers de huesos ---
+const _Y = new THREE.Vector3(0, 1, 0), _d = new THREE.Vector3(), _p = new THREE.Vector3();
+function bone(r, len, mat, parent) {
+  const m = new THREE.Mesh(new THREE.CapsuleGeometry(r, len - 2 * r, 4, 10), mat);
+  m.castShadow = true;
+  parent.add(m);
+  return m;
+}
+function placeBone(m, a, b) {
+  m.position.addVectors(a, b).multiplyScalar(0.5);
+  m.quaternion.setFromUnitVectors(_Y, _d.subVectors(b, a).normalize());
+}
+// IK de 2 huesos en 3D. Mueve `T` al punto alcanzable mas cercano y devuelve el codo/rodilla en `E`.
+function solveLimb(S, T, l1, l2, pole, E) {
+  _d.subVectors(T, S);
+  const d = Math.min(Math.max(_d.length(), Math.abs(l1 - l2) + 1e-3), l1 + l2 - 1e-3);
+  _d.normalize();
+  T.copy(S).addScaledVector(_d, d);
+  const a = (l1 * l1 - l2 * l2 + d * d) / (2 * d);
+  const h = Math.sqrt(Math.max(0, l1 * l1 - a * a));
+  _p.copy(pole).addScaledVector(_d, -pole.dot(_d)).normalize();
+  E.copy(S).addScaledVector(_d, a).addScaledVector(_p, h);
 }
 
-// --- Barca (shell de competición con casco lofted) ---
-function buildBoat() {
-  boat = new THREE.Group();
-
-  // --- Casco (hull) ---
-  const hullGeom = buildHullGeometry();
-  const hullMat = new THREE.MeshStandardMaterial({ color: 0xB71C1C, roughness: 0.35, metalness: 0.35, flatShading: false, side: THREE.DoubleSide });
-  const hull = new THREE.Mesh(hullGeom, hullMat);
-  hull.castShadow = true;
-  hull.receiveShadow = true;
-  boat.add(hull);
-
-  // --- Cubierta (deck) ---
-  const deckGeom = buildDeckGeometry();
-  const deckMat = new THREE.MeshStandardMaterial({ color: 0x880E4F, roughness: 0.4, metalness: 0.25, side: THREE.DoubleSide });
-  const deck = new THREE.Mesh(deckGeom, deckMat);
-  deck.castShadow = true;
-  deck.receiveShadow = true;
-  boat.add(deck);
-
-  // --- Suelo interior de la cala (sigue la forma del casco, tapa el agua) ---
-  {
-    const cN = 14;
-    const cLen = 6.5;
-    const cMaxBeam = 1.25;
-    const cZ0 = -1.6, cZ1 = 1.3;
-    const floorY = 0.05;
-    function cHalfBeam(t) {
-      if (t < 0.02) return 0.008;
-      const bowFine = Math.pow(t, 0.65);
-      return cMaxBeam * 0.5 * Math.sin(Math.PI * bowFine) * 0.95 + cMaxBeam * 0.02;
-    }
-    const fVerts = [];
-    const fIdx = [];
-    for (let i = 0; i <= cN; i++) {
-      const t = i / cN;
-      const z = cZ0 + t * (cZ1 - cZ0);
-      const tt = (z + cLen / 2) / cLen;
-      const hb = cHalfBeam(tt) * 0.82;
-      fVerts.push(-hb, floorY, z, hb, floorY, z);
-    }
-    for (let i = 0; i < cN; i++) {
-      const a = i * 2, b = a + 1, c = a + 2, dd = a + 3;
-      fIdx.push(a, c, b, b, c, dd);
-    }
-    const cockpitFloorGeom = new THREE.BufferGeometry();
-    cockpitFloorGeom.setAttribute('position', new THREE.Float32BufferAttribute(fVerts, 3));
-    cockpitFloorGeom.setIndex(fIdx);
-    cockpitFloorGeom.computeVertexNormals();
-    const cockpitFloorMat = new THREE.MeshStandardMaterial({ color: 0x5D4037, roughness: 0.85, metalness: 0.05, side: THREE.DoubleSide });
-    const cockpitFloor = new THREE.Mesh(cockpitFloorGeom, cockpitFloorMat);
-    cockpitFloor.receiveShadow = true;
-    boat.add(cockpitFloor);
-  }
-
-  // --- Listón decorativo a lo largo de la borda (rub rail / cintón) ---
-  const railPoints = [];
-  const N = 28;
-  const len = 6.5;
-  const maxBeam = 1.25;
-  function halfBeam(t) {
-    if (t < 0.02) return 0.008;
-    const bowFine = Math.pow(t, 0.65);
-    return maxBeam * 0.5 * Math.sin(Math.PI * bowFine) * 0.95 + maxBeam * 0.02;
-  }
-  function sheer(t) {
-    return 0.12 + Math.sin(t * Math.PI) * 0.06 + Math.pow(1 - t, 2) * 0.08;
-  }
-  for (let i = 0; i <= N; i++) {
-    const t = i / N;
-    const z = -len / 2 + t * len;
-    const hb = halfBeam(t);
-    const sh = sheer(t);
-    railPoints.push(new THREE.Vector3(hb, sh + 0.005, z));
-  }
-  // Estribor
-  const railGeomS = new THREE.TubeGeometry(new THREE.CatmullRomCurve3(railPoints), 60, 0.018, 6, false);
-  const railMat = new THREE.MeshStandardMaterial({ color: 0xFFD600, roughness: 0.3, metalness: 0.5 });
-  const railS = new THREE.Mesh(railGeomS, railMat);
-  railS.castShadow = true;
-  boat.add(railS);
-  // Babor (mirror)
-  const railPointsB = railPoints.map(p => new THREE.Vector3(-p.x, p.y, p.z));
-  const railGeomB = new THREE.TubeGeometry(new THREE.CatmullRomCurve3(railPointsB), 60, 0.018, 6, false);
-  const railB = new THREE.Mesh(railGeomB, railMat);
-  railB.castShadow = true;
-  boat.add(railB);
-
-  // --- Carril deslizante del asiento ---
-  const railTrackGeom = new THREE.BoxGeometry(0.7, 0.03, 1.1);
-  const railTrackMat = new THREE.MeshStandardMaterial({ color: 0xCFD8DC, roughness: 0.25, metalness: 0.8 });
-  const railTrack = new THREE.Mesh(railTrackGeom, railTrackMat);
-  railTrack.position.set(0, 0.12, 0.2);
-  boat.add(railTrack);
-
-  // --- Asiento deslizante ---
-  const seatGeom = new THREE.BoxGeometry(0.5, 0.06, 0.28);
-  const seatMat = new THREE.MeshStandardMaterial({ color: 0x263238, roughness: 0.55 });
-  const seat = new THREE.Mesh(seatGeom, seatMat);
-  seat.position.set(0, 0.17, 0.2);
-  seat.name = 'seat';
-  seat.castShadow = true;
-  boat.add(seat);
-
-  // --- Reposapiés (footboards) ---
-  const footGeom = new THREE.BoxGeometry(0.6, 0.35, 0.04);
-  const footMat = new THREE.MeshStandardMaterial({ color: 0x37474F, roughness: 0.7 });
-  const footboard = new THREE.Mesh(footGeom, footMat);
-  footboard.position.set(0, 0.2, -1.05);
-  footboard.rotation.x = -0.25;
-  footboard.castShadow = true;
-  boat.add(footboard);
-
-  // --- Oarlocks (topes de los remos) ---
-  const lockMat = new THREE.MeshStandardMaterial({ color: 0xB0BEC5, roughness: 0.2, metalness: 0.9 });
-  for (const side of [-1, 1]) {
-    const lockBaseGeom = new THREE.BoxGeometry(0.08, 0.04, 0.06);
-    const lockBase = new THREE.Mesh(lockBaseGeom, lockMat);
-    lockBase.position.set(side * 0.5, 0.2, -0.35);
-    lockBase.castShadow = true;
-    boat.add(lockBase);
-
-    const pinGeom = new THREE.CylinderGeometry(0.015, 0.015, 0.1, 8);
-    const pin = new THREE.Mesh(pinGeom, lockMat);
-    pin.position.set(side * 0.5, 0.26, -0.35);
-    boat.add(pin);
-  }
-
-  // --- Pivote del remero (sobre el asiento) ---
-  rower = new THREE.Group();
-  rower.position.set(0, 0.2, 0.2);
-  boat.add(rower);
-  buildRowerBody();
-
-  // --- Remos ---
-  oarLeft = buildOar(-1);
-  oarLeft.position.set(-0.5, 0.26, -0.35);
-  oarLeft.userData.side = -1;
-  boat.add(oarLeft);
-
-  oarRight = buildOar(1);
-  oarRight.position.set(0.5, 0.26, -0.35);
-  oarRight.userData.side = 1;
-  boat.add(oarRight);
-
-  // Ajustar la animación del asiento para el nuevo rango
-  boat.position.set(0, 0, 0);
-  scene.add(boat);
-}
-
-// --- Remo realista: mango, fuste largo y pala plana ---
-function buildOar(side) {
+// --- Remo (sculls): mango, fuste y pala eliptica. Se construye hacia +X*side ---
+function buildOar(side, bladeColor) {
   const oar = new THREE.Group();
+  const roll = new THREE.Group(); // el "feathering" gira el remo sobre su eje
+  oar.add(roll);
+  oar.userData.roll = roll;
+  const at = (m, x) => { m.position.x = x; m.castShadow = true; roll.add(m); return m; };
 
-  const shaftMat = new THREE.MeshStandardMaterial({ color: 0x5D4037, roughness: 0.6, metalness: 0.1 });
-  const handleMat = new THREE.MeshStandardMaterial({ color: 0x3E2723, roughness: 0.8 });
-  const bladeMat = new THREE.MeshStandardMaterial({ color: 0xE65100, roughness: 0.4, metalness: 0.3, flatShading: false });
-  const collarMat = new THREE.MeshStandardMaterial({ color: 0xCFD8DC, roughness: 0.3, metalness: 0.7 });
-
-  const s = side || 1; // dirección X
-
-  // Fuste (shaft) — cilindro largo, desde el oarlock hacia fuera
-  const shaftLen = 2.25;
-  const shaftGeom = new THREE.CylinderGeometry(0.035, 0.045, shaftLen, 12);
-  shaftGeom.rotateZ(Math.PI / 2);
-  const shaft = new THREE.Mesh(shaftGeom, shaftMat);
-  shaft.position.x = (s * shaftLen) / 2;
-  shaft.castShadow = true;
-  oar.add(shaft);
-
-  // Fuste interior (desde el oarlock hacia el centro, donde van las manos)
-  const innerShaftLen = 0.5;
-  const innerShaftGeom = new THREE.CylinderGeometry(0.04, 0.04, innerShaftLen, 12);
-  innerShaftGeom.rotateZ(Math.PI / 2);
-  const innerShaft = new THREE.Mesh(innerShaftGeom, shaftMat);
-  innerShaft.position.x = -s * innerShaftLen / 2;
-  innerShaft.castShadow = true;
-  oar.add(innerShaft);
-
-  // Mango (donde agarran las manos) — en el extremo interior, con grip
-  const handleGeom = new THREE.CylinderGeometry(0.055, 0.05, 0.25, 12);
-  handleGeom.rotateZ(Math.PI / 2);
-  const handle = new THREE.Mesh(handleGeom, handleMat);
-  handle.position.x = -s * (innerShaftLen + 0.2);
-  handle.castShadow = true;
-  oar.add(handle);
-
-  // Collar / tope (junto al oarlock)
-  const collarGeom = new THREE.CylinderGeometry(0.06, 0.06, 0.08, 12);
-  collarGeom.rotateZ(Math.PI / 2);
-  const collar = new THREE.Mesh(collarGeom, collarMat);
-  collar.position.x = s * 0.04;
-  oar.add(collar);
-
-  // Pala (blade) — plana y asimétrica, en el extremo exterior
-  // Usamos una forma personalizada con ExtrudeGeometry o un Box ahusado
-  const bladeGeom = new THREE.BoxGeometry(0.7, 0.03, 0.3, 4, 1, 2);
-  // Ahusar la pala: más estrecha en el extremo
-  const bp = bladeGeom.attributes.position;
-  for (let i = 0; i < bp.count; i++) {
-    const x = bp.getX(i);
-    // x va de 0..0.7; estrechar en el extremo lejano
-    const taper = 1.0 - (x / 0.7) * 0.45;
-    bp.setZ(i, bp.getZ(i) * taper);
-  }
-  bladeGeom.computeVertexNormals();
-  const blade = new THREE.Mesh(bladeGeom, bladeMat);
-  blade.position.x = s * (shaftLen + 0.2625);
-  blade.castShadow = true;
-  oar.add(blade);
-
+  const len = OAR_IN + OAR_OUT;
+  const shaft = new THREE.CylinderGeometry(0.022, 0.026, len, 10).rotateZ(Math.PI / 2);
+  at(new THREE.Mesh(shaft, new THREE.MeshStandardMaterial({ color: 0x212121, roughness: 0.4 })), side * (OAR_OUT - OAR_IN) / 2);
+  const grip = new THREE.CylinderGeometry(0.033, 0.033, 0.24, 10).rotateZ(Math.PI / 2);
+  at(new THREE.Mesh(grip, new THREE.MeshStandardMaterial({ color: 0x111111, roughness: 0.9 })), -side * GRIP);
+  const sleeve = new THREE.CylinderGeometry(0.04, 0.04, 0.06, 10).rotateZ(Math.PI / 2);
+  at(new THREE.Mesh(sleeve, new THREE.MeshStandardMaterial({ color: 0xFFFFFF, roughness: 0.5 })), 0);
+  // Pala: elipse 0.5 x 0.2, plana, en el extremo exterior
+  const blade = new THREE.CylinderGeometry(1, 1, 0.015, 24).rotateX(Math.PI / 2).scale(0.25, 0.1, 1);
+  at(new THREE.Mesh(blade, new THREE.MeshStandardMaterial({ color: bladeColor, roughness: 0.4, side: THREE.DoubleSide })), side * (OAR_OUT - 0.25));
   return oar;
 }
 
-// --- Personaje remero detallado (mayor resolución, anatomía articulada) ---
-function buildRowerBody() {
-  const skinMat = new THREE.MeshStandardMaterial({ color: 0xFFD3A5, roughness: 0.6, flatShading: false });
-  const shirtMat = new THREE.MeshStandardMaterial({ color: 0xC62828, roughness: 0.5, flatShading: false });
-  const pantsMat = new THREE.MeshStandardMaterial({ color: 0x1A237E, roughness: 0.6, flatShading: false });
-  const hairMat = new THREE.MeshStandardMaterial({ color: 0x3E2723, roughness: 0.8 });
-  const shoeMat = new THREE.MeshStandardMaterial({ color: 0x212121, roughness: 0.7 });
+// --- Construye barco + remero + remos. Devuelve el Group (userData.rig guarda las piezas animables) ---
+function buildShell(hullColor, shirtColor, bladeColor) {
+  const shell = new THREE.Group();
+  const M = (color, o = {}) => new THREE.MeshStandardMaterial({ color, roughness: 0.5, ...o });
+  const mesh = (geo, mat, parent = shell) => { const m = new THREE.Mesh(geo, mat); m.castShadow = true; parent.add(m); return m; };
+  const V = (x, y, z) => new THREE.Vector3(x, y, z);
+  const rod = (a, b, r, mat) => { // varilla entre dos puntos
+    const m = mesh(new THREE.CylinderGeometry(r, r, 1, 6), mat);
+    placeBone(m, a, b);
+    m.scale.y = a.distanceTo(b);
+  };
 
-  // --- Torso: torso + caderas como groups separados para articulación ---
-  // Hips (cadera, base del torso)
+  const g = shellGeometries();
+  const hullMat = M(hullColor, { roughness: 0.3, metalness: 0.1, side: THREE.DoubleSide });
+  const deckMat = M(new THREE.Color(hullColor).lerp(new THREE.Color(0xffffff), 0.25), { side: THREE.DoubleSide });
+  const hull = mesh(g.hull, hullMat); hull.receiveShadow = true;
+  mesh(g.foreDeck, deckMat); mesh(g.aftDeck, deckMat);
+
+  const metal = M(0xCFD8DC, { roughness: 0.25, metalness: 0.7 });
+  const dark = M(0x263238, { roughness: 0.7 });
+  const white = M(0xFFFFFF);
+
+  // Bola de proa, coaming y suelo de la cala
+  mesh(new THREE.SphereGeometry(0.035, 10, 8), white).position.set(0, hullSheer(0) , -HULL_LEN / 2 - 0.01);
+  for (const s of [-1, 1]) {
+    const hb = HULL_HB, y = hullSheer(0.5) + 0.01;
+    rod(V(s * hb, y, COCKPIT_Z0), V(s * hb, y, COCKPIT_Z1), 0.014, white);
+  }
+  const floor = mesh(new THREE.BoxGeometry(0.4, 0.01, COCKPIT_Z1 - COCKPIT_Z0), dark);
+  floor.position.set(0, -0.03, (COCKPIT_Z0 + COCKPIT_Z1) / 2);
+
+  // Carriles + asiento
+  for (const s of [-1, 1]) mesh(new THREE.BoxGeometry(0.025, 0.05, 1.0), metal).position.set(s * 0.11, 0.0, 0.2);
+  const seat = mesh(new THREE.BoxGeometry(0.3, 0.05, 0.3), dark);
+  seat.position.y = 0.065;
+
+  // Plancha de pies (inclinada) + zapatos; el tobillo es el objetivo del IK de las piernas
+  const TILT = 0.5;
+  const up = V(0, Math.cos(TILT), Math.sin(TILT));    // hacia arriba a lo largo de la plancha
+  const nr = V(0, Math.sin(TILT), -Math.cos(TILT));   // normal hacia el remero
+  const plate = mesh(new THREE.BoxGeometry(0.42, 0.28, 0.02), metal);
+  plate.rotation.x = TILT;
+  plate.position.set(0, 0.12, 0.9);
+  const shoeMat = M(0xF5F5F5, { roughness: 0.6 });
+  const ankles = {};
+  for (const s of [-1, 1]) {
+    const c = V(s * 0.13, 0.12, 0.9).addScaledVector(nr, 0.07);
+    const shoe = mesh(new THREE.BoxGeometry(0.11, 0.27, 0.09), shoeMat);
+    shoe.position.copy(c);
+    shoe.rotation.x = TILT;
+    ankles[s] = c.clone().addScaledVector(up, -0.07).addScaledVector(nr, 0.05);
+  }
+
+  // Riggers: cercha de dos varillas desde la borda hasta el oarlock + pin
+  const oars = {};
+  for (const s of [-1, 1]) {
+    const pin = V(s * PIN_X, 0.1, PIN_Z);
+    for (const dz of [-0.3, 0.3]) {
+      const z = PIN_Z + dz;
+      rod(V(s * hullHB(hullT(z)), hullSheer(hullT(z)), z), pin, 0.012, metal);
+    }
+    rod(pin, V(s * PIN_X, PIN_Y[s] + 0.02, PIN_Z), 0.012, metal);
+    const oar = buildOar(s, bladeColor);
+    oar.position.set(s * PIN_X, PIN_Y[s], PIN_Z);
+    shell.add(oar);
+    oars[s] = oar;
+  }
+
+  // --- Remero ---
+  const skin = M(0xF0C29B, { roughness: 0.6 }), shirt = M(shirtColor), shorts = M(0x1A237E, { roughness: 0.6 });
   const hips = new THREE.Group();
-  hips.position.y = 0;
-  rower.add(hips);
-  rower.userData.hips = hips;
+  hips.position.y = HIP_Y;
+  shell.add(hips);
+  mesh(new THREE.CapsuleGeometry(0.1, 0.18, 4, 10).rotateZ(Math.PI / 2), shorts, hips);
 
-  const hipGeom = new THREE.BoxGeometry(0.55, 0.22, 0.35);
-  const hip = new THREE.Mesh(hipGeom, pantsMat);
-  hip.castShadow = true;
-  hips.add(hip);
-
-  // Spine / torso superior (pivot en la cadera para inclinarse)
-  const spine = new THREE.Group();
-  spine.position.y = 0.11;
+  const spine = new THREE.Group(); // pivota en la cadera para inclinar el tronco
+  spine.position.y = 0.08;
   hips.add(spine);
-  rower.userData.spine = spine;
+  const torso = mesh(new THREE.CapsuleGeometry(0.15, 0.22, 4, 12).scale(1.3, 1, 0.8), shirt, spine);
+  torso.position.y = 0.26;
+  mesh(new THREE.CylinderGeometry(0.05, 0.055, 0.1, 8), skin, spine).position.y = 0.56;
+  const head = mesh(new THREE.SphereGeometry(0.115, 18, 14).scale(0.92, 1.1, 1), skin, spine);
+  head.position.y = 0.72;
+  const hair = mesh(new THREE.SphereGeometry(0.122, 16, 12, 0, Math.PI * 2, 0, Math.PI * 0.6).scale(0.95, 1.1, 1.02), M(0x3E2723, { roughness: 0.8 }), spine);
+  hair.position.y = 0.72;
+  hair.rotation.x = -0.4; // cubre nuca y coronilla; la cara (+Z) queda libre
+  for (const s of [-1, 1]) mesh(new THREE.SphereGeometry(0.014, 6, 6), M(0x111111), spine).position.set(s * 0.042, 0.735, 0.11);
 
-  const torsoGeom = new THREE.BoxGeometry(0.58, 0.65, 0.32);
-  // Redondear ligeramente el torso escalando los vértices superiores
-  const torso = new THREE.Mesh(torsoGeom, shirtMat);
-  torso.position.y = 0.33;
-  torso.castShadow = true;
-  spine.add(torso);
-
-  // Pecho / pecho (un poco más ancho arriba)
-  const chestGeom = new THREE.BoxGeometry(0.6, 0.2, 0.34);
-  const chest = new THREE.Mesh(chestGeom, shirtMat);
-  chest.position.y = 0.6;
-  chest.castShadow = true;
-  spine.add(chest);
-
-  // Cuello
-  const neckGeom = new THREE.CylinderGeometry(0.09, 0.1, 0.12, 10);
-  const neck = new THREE.Mesh(neckGeom, skinMat);
-  neck.position.y = 0.73;
-  neck.castShadow = true;
-  spine.add(neck);
-
-  // Cabeza (alta resolución)
-  const headGeom = new THREE.SphereGeometry(0.17, 20, 16);
-  const head = new THREE.Mesh(headGeom, skinMat);
-  head.position.y = 0.9;
-  head.castShadow = true;
-  spine.add(head);
-
-  // Pelo (media esfera encima de la cabeza)
-  const hairGeom = new THREE.SphereGeometry(0.185, 16, 12, 0, Math.PI * 2, 0, Math.PI * 0.55);
-  const hair = new THREE.Mesh(hairGeom, hairMat);
-  hair.position.y = 0.9;
-  spine.add(hair);
-
-  // --- Brazos articulados: hombro → bíceps → codo → antebrazo → mano ---
-  // Cada brazo cuelga del spine (hombros a la altura del pecho)
-  for (const side of [-1, 1]) {
-    const sideKey = side === -1 ? 'L' : 'R';
-
-    // Hombro (pivot)
-    const shoulder = new THREE.Group();
-    shoulder.position.set(side * 0.34, 0.6, 0);
-    spine.add(shoulder);
-
-    // Bíceps (upper arm) — cilindro
-    const upperArmGeom = new THREE.CylinderGeometry(0.07, 0.065, 0.38, 12);
-    const upperArm = new THREE.Mesh(upperArmGeom, shirtMat);
-    upperArm.position.y = -0.19;
-    upperArm.castShadow = true;
-    shoulder.add(upperArm);
-
-    // Codo (pivot al final del bíceps)
-    const elbow = new THREE.Group();
-    elbow.position.y = -0.38;
-    shoulder.add(elbow);
-
-    // Antebrazo (forearm) — cilindro, piel
-    const forearmGeom = new THREE.CylinderGeometry(0.055, 0.05, 0.36, 12);
-    const forearm = new THREE.Mesh(forearmGeom, skinMat);
-    forearm.position.y = -0.18;
-    forearm.castShadow = true;
-    elbow.add(forearm);
-
-    // Mano (esfera achatada)
-    const handGeom = new THREE.SphereGeometry(0.065, 10, 8);
-    handGeom.scale(1, 0.8, 0.5);
-    const hand = new THREE.Mesh(handGeom, skinMat);
-    hand.position.y = -0.38;
-    hand.castShadow = true;
-    elbow.add(hand);
-
-    rower.userData['shoulder' + sideKey] = shoulder;
-    rower.userData['elbow' + sideKey] = elbow;
-    rower.userData['hand' + sideKey] = hand;
+  // Huesos (en el marco del barco; se recolocan cada frame)
+  const limbs = {};
+  for (const s of [-1, 1]) {
+    limbs[s] = {
+      arm: [bone(0.052, ARM[0], shirt, shell), bone(0.04, ARM[1], skin, shell)],
+      hand: mesh(new THREE.SphereGeometry(0.045, 8, 6), skin),
+      leg: [bone(0.075, LEG[0], shorts, shell), bone(0.055, LEG[1], skin, shell)],
+      ankle: ankles[s],
+    };
   }
 
-  // --- Piernas: cadera → muslo → rodilla → espinilla → pie ---
-  // Orientadas hacia adelante (proa, -Z), horizontales con rodillas elevadas
-  for (const side of [-1, 1]) {
-    const sideKey = side === -1 ? 'L' : 'R';
-
-    // Hip joint (pivot en la cadera)
-    const hipJoint = new THREE.Group();
-    hipJoint.position.set(side * 0.14, -0.02, 0);
-    hips.add(hipJoint);
-
-    // Muslo (thigh) — cilindro acostado horizontal apuntando hacia adelante (-Z)
-    const thighLen = 0.55;
-    const thighGeom = new THREE.CylinderGeometry(0.1, 0.09, thighLen, 12);
-    thighGeom.rotateX(-Math.PI / 2); // acostar a lo largo de -Z
-    const thigh = new THREE.Mesh(thighGeom, pantsMat);
-    thigh.position.z = -thighLen / 2; // centro desplazado hacia adelante
-    thigh.castShadow = true;
-    hipJoint.add(thigh);
-
-    // Rodilla (pivot al final del muslo, ligeramente elevada)
-    const knee = new THREE.Group();
-    knee.position.set(0, 0.06, -thighLen);
-    hipJoint.add(knee);
-
-    // Espinilla (shin) — cilindro que cuelga de la rodilla, hacia abajo
-    const shinLen = 0.5;
-    const shinGeom = new THREE.CylinderGeometry(0.08, 0.06, shinLen, 12);
-    const shin = new THREE.Mesh(shinGeom, skinMat);
-    shin.position.y = -shinLen / 2;
-    shin.castShadow = true;
-    knee.add(shin);
-
-    // Pie (apuntando hacia adelante, hacia el reposapiés)
-    const footGeom = new THREE.BoxGeometry(0.12, 0.08, 0.25);
-    const foot = new THREE.Mesh(footGeom, shoeMat);
-    foot.position.set(0, -shinLen, 0.06);
-    foot.castShadow = true;
-    knee.add(foot);
-
-    rower.userData['hipJoint' + sideKey] = hipJoint;
-    rower.userData['knee' + sideKey] = knee;
-  }
+  shell.userData.rig = { seat, hips, spine, oars, limbs };
+  return shell;
 }
 
-// --- Animación de remada: cuerpo, brazos, piernas y remos sincronizados ---
-function syncArmsToOars() {
-  if (!oarLeft || !oarRight || !rower || !boat) return;
-  const L1 = 0.38; // bíceps (hombro → codo)
-  const L2 = 0.36; // antebrazo (codo → mano)
+// Curva de la remada: d = 0 catch (comprimido), 1 finish (extendido). Drive = 35% del ciclo.
+function strokeD(phase) {
+  if (phase < 0.35) { const u = phase / 0.35; return u * u * (3 - 2 * u); }
+  return 0.5 + 0.5 * Math.cos(Math.PI * (phase - 0.35) / 0.65);
+}
+// 0 = pala en el agua, 1 = fuera (recobro)
+function bladeLiftAt(phase) {
+  if (phase < 0.35) return 0;
+  if (phase < 0.45) return (phase - 0.35) / 0.1;
+  if (phase < 0.9) return 1;
+  return 1 - (phase - 0.9) / 0.1;
+}
 
-  [['L', oarLeft, -1], ['R', oarRight, 1]].forEach(([sideKey, oar, side]) => {
-    const shoulder = rower.userData['shoulder' + sideKey];
-    const elbow = rower.userData['elbow' + sideKey];
-    if (!shoulder || !elbow) return;
+const _S = new THREE.Vector3(), _T = new THREE.Vector3(), _E = new THREE.Vector3(), _pole = new THREE.Vector3();
+const _ease = x => x * x * (3 - 2 * x);
+function animateShell(shell, d, lift) {
+  const r = shell.userData.rig;
+  // Secuencia real: piernas -> espalda -> brazos (y al reves en el recobro)
+  const seatZ = SEAT_C - SLIDE * _ease(Math.min(d / 0.7, 1));
+  const lean = 0.45 - 0.75 * _ease(Math.max(0, (d - 0.25) / 0.75)); // + = hacia popa (hacia donde mira)
+  r.seat.position.z = seatZ;
+  r.hips.position.z = seatZ;
+  r.spine.rotation.x = lean;
 
-    // Posición del mango del remo en mundo (extremo interior)
-    oar.updateMatrixWorld();
-    const handleWorld = new THREE.Vector3(-side * 0.625, 0, 0);
-    oar.localToWorld(handleWorld);
+  const alpha = 0.85 - 1.47 * d;    // barrido: + = pala hacia proa (catch), - = hacia popa (finish)
+  const beta = 0.16 - 0.22 * lift;  // cabeceo: + = pala hacia el agua
+  const roll = lift * 1.35;         // pala plana en el recobro, vertical en el agua
+  const cl = Math.cos(lean), sl = Math.sin(lean);
 
-    // Posición del hombro en mundo
-    const shoulderWorld = new THREE.Vector3();
-    shoulder.getWorldPosition(shoulderWorld);
+  for (const s of [-1, 1]) {
+    const oar = r.oars[s], L = r.limbs[s];
+    oar.rotation.set(0, s * alpha, -s * beta);
+    oar.userData.roll.rotation.x = roll;
+    oar.updateMatrix();
 
-    // Transformar al espacio local del spine (parent del hombro)
-    const spine = shoulder.parent;
-    spine.updateMatrixWorld();
-    const invSpine = new THREE.Matrix4().copy(spine.matrixWorld).invert();
-    const handleLocal = handleWorld.clone().applyMatrix4(invSpine);
-    const shoulderLocal = shoulderWorld.clone().applyMatrix4(invSpine);
+    // Brazos: hombro (sigue al tronco) -> mango del remo
+    _S.set(s * 0.21, HIP_Y + 0.08 + 0.46 * cl, seatZ + 0.46 * sl);
+    _T.set(-s * GRIP, 0, 0).applyMatrix4(oar.matrix);
+    solveLimb(_S, _T, ARM[0], ARM[1], _pole.set(s * 0.6, -0.6, -0.8), _E);
+    placeBone(L.arm[0], _S, _E); placeBone(L.arm[1], _E, _T);
+    L.hand.position.copy(_T);
 
-    // Vector relativo (hombro → mango) proyectado en plano YZ
-    const dy = handleLocal.y - shoulderLocal.y;
-    const dz = handleLocal.z - shoulderLocal.z;
-
-    // Distancia clampeada al rango del brazo
-    let dist = Math.sqrt(dy * dy + dz * dz);
-    dist = Math.max(Math.abs(L1 - L2) + 0.01, Math.min(L1 + L2 - 0.01, dist));
-
-    // IK 2-huesos: ley de cosenos
-    const cosElbow = (dist * dist - L1 * L1 - L2 * L2) / (2 * L1 * L2);
-    const elbowAngle = Math.acos(Math.max(-1, Math.min(1, cosElbow)));
-
-    const cosShoulder = (L1 * L1 + dist * dist - L2 * L2) / (2 * L1 * dist);
-    const shoulderInternal = Math.acos(Math.max(-1, Math.min(1, cosShoulder)));
-
-    // Ángulo del objetivo desde -Y hacia -Z (adelante)
-    const targetAngle = Math.atan2(-dz, -dy);
-
-    // Codo flexiona hacia adelante (antebrazo hacia -Z respecto al bíceps)
-    shoulder.rotation.x = targetAngle - shoulderInternal;
-    elbow.rotation.x = elbowAngle;
-  });
+    // Piernas: cadera -> tobillo fijo en la plancha; rodilla hacia arriba y afuera
+    _S.set(s * 0.1, HIP_Y, seatZ);
+    _T.copy(L.ankle);
+    solveLimb(_S, _T, LEG[0], LEG[1], _pole.set(s * 0.3, 1, 0), _E);
+    placeBone(L.leg[0], _S, _E); placeBone(L.leg[1], _E, _T);
+  }
 }
 
 function updateRowerAnimation(dt) {
@@ -1728,90 +1599,12 @@ function updateRowerAnimation(dt) {
   }
 
   const phase = gameState.strokePhase;
-
-  // stroke: 0 = catch (cuerpo adelante, brazos extendidos), 1 = finish (cuerpo atrás, brazos flexionados)
-  // Fase 0..0.35 = drive (tirón: 0→1), Fase 0.35..1 = recovery (1→0)
-  let drive;
-  if (phase < 0.35) {
-    drive = Math.sin((phase / 0.35) * Math.PI / 2); // 0..1 (suave)
-  } else {
-    drive = Math.cos(((phase - 0.35) / 0.65) * Math.PI / 2); // 1..0
-  }
-
-  // ease para suavizar
-  const d = drive;
-
-  // --- Torso: inclina hacia atrás en el finish (drive=1), adelante en el catch (drive=0) ---
-  if (rower.userData.spine) {
-    // De -0.35 (adelante) a +0.25 (atrás)
-    rower.userData.spine.rotation.x = -0.35 + d * 0.6;
-  }
-
-  // --- Hips: el asiento se desliza hacia delante (catch) y hacia atrás (finish) ---
-  // Catch (d=0): asiento adelantado cerca del reposapiés (-Z)
-  // Finish (d=1): asiento retrasado, piernas estiradas (+Z)
-  if (rower.userData.hips) {
-    rower.userData.hips.position.z = -0.25 + d * 0.45;
-  }
-  const seatMesh = boat.getObjectByName('seat');
-  if (seatMesh) {
-    seatMesh.position.z = -0.05 + d * 0.5;
-  }
-
-  // --- Brazos: controlados por IK (syncArmsToOars) al final de la función ---
-
-  // --- Piernas: flexionadas con rodillas altas en el catch (d=0), estiradas en el finish (d=1) ---
-  ['L', 'R'].forEach(sideKey => {
-    const hipJoint = rower.userData['hipJoint' + sideKey];
-    const knee = rower.userData['knee' + sideKey];
-    if (hipJoint) {
-      // Catch: muslo elevado (rodillas arriba). Finish: muslo horizontal/extendido.
-      // Rotación X positiva levanta el extremo -Z (la rodilla) hacia arriba
-      hipJoint.rotation.x = 0.4 - d * 0.5; // de 0.4 (rodillas altas) a -0.1 (extendido)
-    }
-    if (knee) {
-      // Catch: espinilla casi vertical (cuelga de la rodilla alta hacia el pie).
-      // Finish: espinilla horizontal (pierna estirada hacia el reposapiés).
-      // Rotación X positiva mueve -Y (abajo) hacia -Z (adelante)
-      knee.rotation.x = 0.15 + d * 1.25; // de 0.15 (vertical) a 1.4 (horizontal)
-    }
-  });
-
-  // --- Remos: ángulos fijos sincronizados con la remada ---
-  // El remo pivota en el oarlock; su rotación sigue la fase de drive
-  // Transición suave de levantamiento de la pala (sin saltos bruscos)
-  let bladeLift;
-  if (phase < 0.35) {
-    bladeLift = 0;                                  // drive: pala en el agua
-  } else if (phase < 0.45) {
-    bladeLift = (phase - 0.35) / 0.1;               // salida del agua (0→1)
-  } else if (phase < 0.9) {
-    bladeLift = 1;                                  // recovery: pala levantada
-  } else {
-    bladeLift = 1 - (phase - 0.9) / 0.1;           // entrada al agua (1→0)
-  }
-
-  if (oarLeft) {
-    oarLeft.rotation.x = -0.8 + d * 1.5;            // catch: adelante (-0.8), finish: atrás (0.7)
-    oarLeft.rotation.y = -0.15;                      // ligero ángulo horizontal
-    oarLeft.rotation.z = bladeLift * 0.4;           // elevar pala en recovery
-  }
-  if (oarRight) {
-    oarRight.rotation.x = -0.8 + d * 1.5;
-    oarRight.rotation.y = 0.15;
-    oarRight.rotation.z = -bladeLift * 0.4;
-  }
-
-  // --- Sincronizar brazos con el mango del remo (IK) ---
-  // Los remos pivotan en el oarlock; los brazos siguen el mango
-  syncArmsToOars();
+  animateShell(boat, strokeD(phase), bladeLiftAt(phase));
 
   // --- Balanceo de la barca ---
-  if (boat) {
-    boat.rotation.z = Math.sin(phase * Math.PI * 2) * 0.02;
-    boat.rotation.x = Math.sin(phase * Math.PI * 2) * 0.015;
-    boat.position.y = Math.sin(phase * Math.PI * 2) * 0.04 + 0.12;
-  }
+  boat.rotation.z = Math.sin(phase * Math.PI * 2) * 0.01;
+  boat.rotation.x = Math.sin(phase * Math.PI * 2) * 0.008;
+  boat.position.y = Math.sin(phase * Math.PI * 2) * 0.03 + 0.08;
 }
 
 // --- Movimiento de la barca (delegado al modelo físico) ---
@@ -1829,121 +1622,9 @@ const BOT_CONFIGS = [
   { velocity: 1.1, cadence: 23, lane:  1.0, color: 0x6A1B9A, name: 'Pacífico' },
 ];
 
-function buildSimpleRower(hullColor, shirtColor) {
-  const skinMat = new THREE.MeshStandardMaterial({ color: 0xFFD3A5, roughness: 0.6 });
-  const shirtMat = new THREE.MeshStandardMaterial({ color: shirtColor, roughness: 0.5 });
-  const pantsMat = new THREE.MeshStandardMaterial({ color: 0x1A237E, roughness: 0.6 });
-  const hairMat = new THREE.MeshStandardMaterial({ color: 0x3E2723, roughness: 0.8 });
-
-  const group = new THREE.Group();
-  group.position.set(0, 0.2, 0.2);
-
-  const hips = new THREE.Group();
-  group.add(hips);
-
-  const hipMesh = new THREE.Mesh(new THREE.BoxGeometry(0.55, 0.22, 0.35), pantsMat);
-  hipMesh.castShadow = true;
-  hips.add(hipMesh);
-
-  const spine = new THREE.Group();
-  spine.position.y = 0.11;
-  hips.add(spine);
-
-  const torso = new THREE.Mesh(new THREE.BoxGeometry(0.58, 0.65, 0.32), shirtMat);
-  torso.position.y = 0.33;
-  torso.castShadow = true;
-  spine.add(torso);
-
-  const head = new THREE.Mesh(new THREE.SphereGeometry(0.17, 14, 12), skinMat);
-  head.position.y = 0.9;
-  head.castShadow = true;
-  spine.add(head);
-
-  const hair = new THREE.Mesh(
-    new THREE.SphereGeometry(0.185, 12, 8, 0, Math.PI * 2, 0, Math.PI * 0.55),
-    hairMat
-  );
-  hair.position.y = 0.9;
-  spine.add(hair);
-
-  const arms = [];
-  for (const side of [-1, 1]) {
-    const shoulder = new THREE.Group();
-    shoulder.position.set(side * 0.34, 0.6, 0);
-    spine.add(shoulder);
-
-    const upperArm = new THREE.Mesh(new THREE.CylinderGeometry(0.07, 0.065, 0.38, 8), shirtMat);
-    upperArm.position.y = -0.19;
-    upperArm.castShadow = true;
-    shoulder.add(upperArm);
-
-    const elbow = new THREE.Group();
-    elbow.position.y = -0.38;
-    shoulder.add(elbow);
-
-    const forearm = new THREE.Mesh(new THREE.CylinderGeometry(0.055, 0.05, 0.36, 8), skinMat);
-    forearm.position.y = -0.18;
-    forearm.castShadow = true;
-    elbow.add(forearm);
-
-    arms.push({ shoulder, elbow });
-  }
-
-  group.userData = { spine, hips, arms };
-  return group;
-}
-
-function buildSimpleBoat(hullColor, shirtColor) {
-  const hullMat = new THREE.MeshStandardMaterial({ color: hullColor, roughness: 0.35, metalness: 0.35, side: THREE.DoubleSide });
-  const hull = new THREE.Mesh(buildHullGeometry(), hullMat);
-  hull.castShadow = true;
-  hull.receiveShadow = true;
-
-  const deckMat = new THREE.MeshStandardMaterial({ color: hullColor, roughness: 0.4, metalness: 0.25, side: THREE.DoubleSide });
-  const deck = new THREE.Mesh(buildDeckGeometry(), deckMat);
-  deck.castShadow = true;
-  deck.receiveShadow = true;
-
-  const group = new THREE.Group();
-  group.add(hull);
-  group.add(deck);
-
-  const botRower = buildSimpleRower(hullColor, shirtColor);
-  group.add(botRower);
-  group.userData.rower = botRower;
-
-  // Remos simplificados
-  const oars = [];
-  for (const side of [-1, 1]) {
-    const oar = new THREE.Group();
-    oar.position.set(side * 0.5, 0.26, -0.35);
-
-    const shaftMat = new THREE.MeshStandardMaterial({ color: 0x5D4037, roughness: 0.6 });
-    const bladeMat = new THREE.MeshStandardMaterial({ color: 0xE65100, roughness: 0.4 });
-
-    const shaftGeom = new THREE.CylinderGeometry(0.035, 0.045, 2.25, 8);
-    shaftGeom.rotateZ(Math.PI / 2);
-    const shaft = new THREE.Mesh(shaftGeom, shaftMat);
-    shaft.position.x = side * 1.125;
-    shaft.castShadow = true;
-    oar.add(shaft);
-
-    const blade = new THREE.Mesh(new THREE.BoxGeometry(0.525, 0.03, 0.3), bladeMat);
-    blade.position.x = side * 2.5125;
-    blade.castShadow = true;
-    oar.add(blade);
-
-    group.add(oar);
-    oars.push({ mesh: oar, side });
-  }
-  group.userData.oars = oars;
-
-  return group;
-}
-
 function buildBots() {
   for (const cfg of BOT_CONFIGS) {
-    const botBoat = buildSimpleBoat(cfg.color, cfg.color);
+    const botBoat = buildShell(cfg.color, 0xFFFFFF, cfg.color);
     botBoat.userData.velocity = cfg.velocity;
     botBoat.userData.cadence = cfg.cadence;
     botBoat.userData.lane = cfg.lane;
@@ -1968,39 +1649,7 @@ function updateBots(dt) {
       ud.phase = (ud.phase + dt / cycleTime) % 1;
     }
 
-    const phase = ud.phase;
-    let drive;
-    if (phase < 0.35) {
-      drive = Math.sin((phase / 0.35) * Math.PI / 2);
-    } else {
-      drive = Math.cos(((phase - 0.35) / 0.65) * Math.PI / 2);
-    }
-    const d = drive;
-
-    // Animar remero del bot
-    const botRower = ud.rower;
-    if (botRower) {
-      if (botRower.userData.spine) {
-        botRower.userData.spine.rotation.x = -0.35 + d * 0.6;
-      }
-      if (botRower.userData.hips) {
-        botRower.userData.hips.position.z = -0.25 + d * 0.45;
-      }
-      for (const arm of botRower.userData.arms) {
-        arm.shoulder.rotation.x = 1.1 - d * 1.5;
-        arm.elbow.rotation.x = d * 1.4;
-      }
-    }
-
-    // Animar remos del bot
-    const inWater = phase < 0.4 ? 1 : 0;
-    for (const oarInfo of ud.oars) {
-      const oar = oarInfo.mesh;
-      const side = oarInfo.side;
-      oar.rotation.x = -0.8 + d * 1.5;
-      oar.rotation.y = side === -1 ? -0.15 : 0.15;
-      oar.rotation.z = (side === -1 ? 1 : -1) * (1 - inWater) * 0.4;
-    }
+    animateShell(bot, strokeD(ud.phase), bladeLiftAt(ud.phase));
 
     // Mover bot
     bot.position.z -= ud.velocity * dt;
@@ -2020,8 +1669,8 @@ function updateBots(dt) {
     bot.rotation.y = riverHeading(bz);
 
     // Balanceo suave
-    bot.rotation.z = Math.sin(phase * Math.PI * 2) * 0.02;
-    bot.position.y = Math.sin(phase * Math.PI * 2) * 0.04 + 0.05;
+    bot.rotation.z = Math.sin(ud.phase * Math.PI * 2) * 0.01;
+    bot.position.y = Math.sin(ud.phase * Math.PI * 2) * 0.03 + 0.08;
   }
 }
 
