@@ -35,6 +35,29 @@
     .disconnected { color: #C62828; }
     .connected { color: #00796B; }
 
+    #splits-panel {
+      position: fixed; top: 16px; right: 20px; z-index: 10;
+      background: rgba(20, 30, 50, 0.75); backdrop-filter: blur(8px);
+      border-radius: 12px; padding: 12px 16px;
+      color: #cde; font-family: "SF Mono", Monaco, Consolas, monospace; font-size: 13px;
+      min-width: 200px; max-height: 60vh; overflow-y: auto;
+      pointer-events: auto; display: none;
+    }
+    #splits-panel.visible { display: block; }
+    #splits-panel .splits-title {
+      color: #FFA726; font-size: 12px; text-transform: uppercase;
+      letter-spacing: 2px; margin-bottom: 8px; text-align: center;
+    }
+    #splits-list { line-height: 1.7; }
+    #splits-list .split-row {
+      display: flex; justify-content: space-between; gap: 12px;
+      padding: 3px 0; border-bottom: 1px solid rgba(255,255,255,0.08);
+    }
+    #splits-list .split-row:last-child { border-bottom: none; }
+    #splits-list .split-dist { color: #8ab; }
+    #splits-list .split-times { color: #fff; }
+    #splits-list .split-partial { color: #FFA726; }
+
     #controls {
       position: fixed; bottom: 0; left: 0; right: 0; z-index: 10;
       display: flex; justify-content: center; gap: 12px;
@@ -187,6 +210,18 @@
     }
     #goal-hud .goal-value.finished { color: #e9c46a; }
     #goal-hud .goal-sub { color: #8ab; font-size: 16px; margin-top: 4px; }
+    #goal-hud .goal-rower {
+      font-size: 28px; font-weight: bold; color: #FFA726;
+      text-shadow: 0 1px 4px rgba(0, 0, 0, 0.5);
+      font-family: "SF Mono", Monaco, Consolas, monospace;
+      margin-top: 6px; min-height: 28px;
+    }
+    #goal-hud .goal-time {
+      font-size: 72px; font-weight: bold; color: #ffffff;
+      text-shadow: 0 1px 4px rgba(0, 0, 0, 0.5);
+      font-family: "SF Mono", Monaco, Consolas, monospace;
+      min-height: 72px;
+    }
 
     #log {
       font-family: "SF Mono", Monaco, Consolas, monospace; font-size: 11px;
@@ -225,9 +260,16 @@
   </div>
 </div>
 
+<div id="splits-panel">
+  <div class="splits-title">500 m splits</div>
+  <div id="splits-list"></div>
+</div>
+
 <div id="goal-hud">
+  <div class="goal-time" id="goal-time"></div>
   <div class="goal-label" id="goal-label">Time</div>
   <div class="goal-value" id="goal-value">00:00</div>
+  <div class="goal-rower" id="goal-rower"></div>
   <div class="goal-sub" id="goal-sub"></div>
 </div>
 
@@ -405,6 +447,46 @@ function formatDuration(sec) {
   return `${h.toString().padStart(2,'0')}:${m.toString().padStart(2,'0')}:${s.toString().padStart(2,'0')}`;
 }
 
+function formatSplitTime(sec) {
+  const m = Math.floor(sec / 60);
+  const s = Math.floor(sec % 60);
+  const ms = Math.floor((sec % 1) * 1000);
+  return `${m}:${s.toString().padStart(2,'0')}.${ms.toString().padStart(3,'0')}`;
+}
+
+function resetSplits() {
+  gameState.splits = [];
+  gameState.lastSplitDistance = 0;
+  gameState.lastSplitTime = 0;
+  renderSplits();
+  document.getElementById('splits-panel').classList.add('visible');
+}
+
+function renderSplits() {
+  const list = document.getElementById('splits-list');
+  list.innerHTML = '';
+  gameState.splits.forEach(sp => {
+    const row = document.createElement('div');
+    row.className = 'split-row';
+    row.innerHTML = `<span class="split-dist">${sp.dist}m</span>` +
+      `<span class="split-times"><span class="split-partial">${formatSplitTime(sp.partial)}</span> / ${formatSplitTime(sp.total)}</span>`;
+    list.appendChild(row);
+  });
+}
+
+function checkSplits() {
+  const dist = gameState.gameDistance;
+  const nextSplit = gameState.lastSplitDistance + 500;
+  if (dist >= nextSplit) {
+    const total = gameState.exerciseTime;
+    const partial = total - gameState.lastSplitTime;
+    gameState.splits.push({ dist: nextSplit, partial, total });
+    gameState.lastSplitDistance = nextSplit;
+    gameState.lastSplitTime = total;
+    renderSplits();
+  }
+}
+
 function exportToTCX(data) {
   const duration = estimateDuration(data);
   const distance = data.distance || 0;
@@ -576,6 +658,10 @@ const gameState = {
   // Objetivo del juego
   goalMode: 'free',    // 'time' | 'distance' | 'free'
   goalValue: 0,       // segundos o metros según el modo
+  // Splits de 500m
+  splits: [],         // [{dist, partial, total}]
+  lastSplitDistance: 0,
+  lastSplitTime: 0,
 };
 
 // Getters para medias (definidos como propiedades para que saveProgress los use)
@@ -671,6 +757,10 @@ function updateBoatPhysics(dt) {
       gameState.cadenceSamples++;
     }
   }
+
+  // Splits de 500m
+  checkSplits();
+
   $sTime.textContent = formatDuration(gameState.exerciseTime);
   if (gameState.heartRate > 0) {
     gameState.heartRateSum += gameState.heartRate;
@@ -1984,9 +2074,25 @@ function updateGoalHUD(dt) {
   const labelEl = document.getElementById('goal-label');
   const valueEl = document.getElementById('goal-value');
   const subEl = document.getElementById('goal-sub');
+  const rowerEl = document.getElementById('goal-rower');
+  const timeEl = document.getElementById('goal-time');
 
-  if (gameState.goalMode === 'free' || !gameState.goalValue) {
+  if (gameState.goalMode === 'free') {
+    hud.classList.add('visible');
+    timeEl.textContent = formatDuration(gameState.exerciseTime);
+    labelEl.textContent = 'Estimated';
+    valueEl.textContent = Math.round(gameState.gameDistance) + ' m';
+    rowerEl.textContent = 'Rower: ' + Math.round(gameState.distance) + ' m';
+    subEl.textContent = '';
+    valueEl.classList.remove('finished');
+    return;
+  }
+
+  timeEl.textContent = '';
+
+  if (!gameState.goalValue) {
     hud.classList.remove('visible');
+    rowerEl.textContent = '';
     return;
   }
 
@@ -1998,6 +2104,7 @@ function updateGoalHUD(dt) {
     const secs = Math.floor(remaining % 60);
     valueEl.textContent = `${String(mins).padStart(2, '0')}:${String(secs).padStart(2, '0')}`;
     labelEl.textContent = 'Time left';
+    rowerEl.textContent = '';
     subEl.textContent = '';
     if (remaining <= 0) {
       valueEl.classList.add('finished');
@@ -2011,6 +2118,7 @@ function updateGoalHUD(dt) {
     const remaining = Math.max(0, gameState.goalValue - dist);
     valueEl.textContent = Math.round(remaining) + ' m';
     labelEl.textContent = 'Distance left';
+    rowerEl.textContent = 'Rower: ' + Math.round(gameState.distance) + ' m';
     subEl.textContent = '';
     if (remaining <= 0) {
       valueEl.classList.add('finished');
@@ -2248,6 +2356,7 @@ document.getElementById('stroke-btn').addEventListener('click', () => {
 // --- Arrancar ---
 initThree();
 setStatus('Disconnected', false);
+document.getElementById('splits-panel').classList.add('visible');
 
 // --- Botón pausa ---
 const $pauseOverlay = document.getElementById('pause-overlay');
@@ -2323,6 +2432,7 @@ document.getElementById('btn-reset').addEventListener('click', () => {
   gameState.heartRateSum = 0;
   gameState.heartRateSamples = 0;
   gameState.maxHeartRate = 0;
+  resetSplits();
   if (boat) {
     boat.position.set(0, 0, 0);
     boat.rotation.y = 0;
@@ -2370,6 +2480,7 @@ document.querySelectorAll('.goal-btn').forEach(btn => {
     gameState.heartRateSum = 0;
     gameState.heartRateSamples = 0;
     gameState.maxHeartRate = 0;
+    resetSplits();
     if (boat) {
       boat.position.set(0, 0, 0);
       boat.rotation.y = 0;
